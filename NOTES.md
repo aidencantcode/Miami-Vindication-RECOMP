@@ -41,7 +41,19 @@ Installed in Phase 0 (portable, official sources, SHA-256/512 verified):
 |---|---|---|
 | Git for Windows (PortableGit) | 2.56.1 | `git\cmd\git.exe` |
 | Python (python.org NuGet build) | 3.13.17 | `python-nupkg\tools\python.exe` |
-| pip packages | pyelftools 0.33, capstone 5.0.9, unicorn 2.1.4, itanium_demangler 1.1 | (in that Python) |
+| pip packages | pyelftools 0.33, capstone 5.0.9, unicorn 2.1.4, itanium_demangler 1.1, pillow 13.0.0 | (in that Python) |
+| **Visual Studio Community 2026** (installer, admin) | MSVC 19.52 (14.52.37025), bundled CMake, Ninja, vcpkg 2026-09-26, Clang | `C:\Program Files\Microsoft Visual Studio\18\Community` |
+| vcpkg packages (manifest `vcpkg.json`) | SDL2 2.32.10 | `build\win-x64\vcpkg_installed` |
+| Unicorn C library | 2.1.4: the DLL + headers from the pip wheel, import lib generated | `third_party\unicorn` (git-ignored; `tools\setup_unicorn.ps1`) |
+
+The VS installer returned 3010 (success, **reboot recommended**; the tools work before it).
+**Licence note:** Unicorn is GPLv2. That's fine for this private port; it disappears from the
+final build once the game is statically recompiled (Phase 4).
+
+Native build: `.\tools\build.ps1` (or open the folder in Visual Studio; `CMakePresets.json`).
+Run: `build\win-x64\RelWithDebInfo\gangstar.exe --run [--frames N] [--shot-every K] [--demo 0|1]`,
+`--selftest-load`, `--window`. Log: `build\runtime.log`. Screenshots: `build\shots\run_<time>\`
+(convert with `python -I tools\shots_to_png.py`).
 | Temurin JDK | 21.0.13+9 | `jdk-21.0.13+9\` |
 | jadx | 1.5.6 | `jadx\bin\jadx.bat` |
 
@@ -53,8 +65,8 @@ u need pip python everything". This replaces CLAUDE.md's "ask before installing"
 still ask before deleting files or changing the approach. Keep installs portable under
 `devtools\`, verify checksums, record versions here.
 
-**Not installed yet:** LLVM/clang, CMake, Ninja, Ghidra, SDL2, 7-Zip (not needed; zip
-handled by .NET), ANGLE, ADB/Frida, and no C/C++ compiler of any kind (no MSVC either).
+**Not installed yet:** Ghidra (JDK 21 is ready for it), ANGLE, ADB/Frida, 7-Zip (not needed;
+zip handled by .NET). (CMake, Ninja, Clang and MSVC now come with Visual Studio; see below.)
 
 Git: repo-local identity `Aiden <owner's email>` (set with `git config`, not global).
 
@@ -272,6 +284,58 @@ vs `m_pub_abraham`, `m_pub_fix_o_matic` vs `m_pub_fix-o-matic`; 6 `sfx_aligator_
 those sounds would have failed to load silently (SoundPool returns an error, no crash).
 The APK is 1.0.6 while `data.txt` points at the 1.0.5 data package, which may explain it.
 
+## 6b. Phase 2 results
+
+### 2a: headless full boot in the probe (`analysis/probe_2a.md`)
+Same order as the phone: `nativeSetPhone(800)`, `nativeGetInfo` → `nativeGetJNIEnv` →
+`GLResLoader/GLMediaPlayer.nativeInit` → `Gangster2.nativeInit(isDemo)` → `GameRenderer.nativeInit(1)`
+→ `nativeResize(800,480)` → first frame `nativeResume` → `nativeRender` per frame. All return;
+60 frames (and 1,500 in a long run) without faults or stubs.
+- **Engine startup states (from its own log):** `appInit` → `Application::PostInit` (Glitch engine
+  0.1.0.2, GL driver init, **vox** audio engine) → `PostPostInit` (language pack, HUD, script manager,
+  achievements, **FileManager**, menu manager, **starts the vox sound thread**) → `GSMoviePlayer`
+  (intro video; continues when `isMediaPlaying` returns 0) → `nativeGetDeviceType` picks
+  **"Lower Setting Profile1"** and **disables mipmaps** (both are StormGLOFT hook targets!) →
+  `GSLoading` → content-warning screen → title screen.
+- **JNI surface for boot (Q1):** `NewGlobalRef`×3, `GetStaticMethodID`×57 (all callbacks, all
+  matching Java), `CallStaticIntMethod`, `CallStaticVoidMethod`, `NewStringUTF`. The game reads all
+  files itself with libc `fopen`; it never uses Java's `GLResLoader`.
+- **GL surface:** 64 of 95 imported GL functions used through the title/world load; vertex arrays are
+  FLOAT (positions, texcoords) and UNSIGNED_BYTE (colours), **no GL_FIXED**; draws are ushort-indexed
+  triangles/strips plus point sprites; textures DXT5/DXT1 (~1,200 uploads, 90 MB by the city load),
+  one RGBA5551, one ALPHA. The engine never `strstr`s the extension string; it parses `GL_VERSION`
+  with `sscanf` at offset 13 (`"OpenGL ES-CM 1.1"`).
+- **Threads:** exactly one requested so far: `vox::funcUpdate` (the audio engine's update loop). Not
+  started yet (single guest thread); boot works without it.
+- **Files:** the game probes `<name>_lo.<ext>` / `<name>_hi.<ext>` variants before the normal file,
+  tries `./sdcard/...` 8× before `/sdcard/...` (cwd `/`), looks for `/data/data/<pkg>/Gangstar2.sav`
+  and `Gangstar2.preferences` (absent on first run). Asked for but missing from the data:
+  `dummy.tga` and 14 `*.english.*.glyph` files (e.g. `menu.english.button.glyph`).
+- **Bionic layouts confirmed (Q10):** `_ctype_` and `_tolower_tab_` are read as pointers to tables
+  (1 pointer load, then table reads), exactly as the Android 2.x headers say.
+- **Sound names:** native `nativeGetSoundFileName` returns the original asset names with **`.wav`**;
+  Java's table and the data use **`.ogg`**. Same stem in 1,673/1,736 slots. In the 63 differing slots
+  the native name exists in the data 41×, Java's 15×, neither 7×. **What the phone played: 1,669
+  sounds; using whichever name exists: 1,710** (41 sounds recoverable). Table:
+  `analysis/raw/probe_2a_sounds.tsv`.
+- No kernel-user-helper calls (`0xffff0fc0` etc.) and no `swp`/`ldrex`/`strex`/`mrc` anywhere in the
+  game code: all atomics/locking go through imported pthread functions.
+
+### 2b: native C++ runtime (`src/`)
+- **Design:** "fastmem" guest memory (one 4 GB host reservation, guest address A = host base + A),
+  so HLE code and the GL driver use guest pointers with one addition. One Unicorn (ARM926) instance
+  per guest thread, all mapping the same host pages; the HLE heap, sbrk heap, mmap area and stacks are
+  committed up front so memory is never remapped under a running CPU. Address layout identical to the
+  probe; trap 0 is the return sentinel in both, so **trap addresses match the probe's**.
+- **Verification:** `gangstar --selftest-load` (C++ twin of probe 1a) gives the same numbers as the
+  probe. The GPU check shows GL 4.6 compatibility on the RTX 3060 with S3TC, FBO, VBO, texture combiners.
+- **Result:** `gangstar --run` boots exactly like the probe (448 constructors in 0.02 s, every init call
+  returns, no import without a host implementation, no STUB hit), shows the **content warning**
+  (~5 s), loads data (heap 2 → 14 MB in a few seconds), then shows the **title screen "Touch the screen to
+  continue"** at ~90-100 fps (vsync). Screenshots verified visually.
+- GL identity reported to the game: vendor "NVIDIA Corporation", renderer "NVIDIA Tegra", version
+  "OpenGL ES-CM 1.1", a Tegra-like extension list (representative, not captured from a device).
+
 **Unicorn behaviours relied on** (`test_unicorn_semantics.py`, 2.1.4): in an SVC hook,
 PC = svc+4; writing PC (with the Thumb bit) from a hook redirects execution; nested
 `emu_start` from inside a hook works (used to call the game's own `malloc` from HLE
@@ -342,18 +406,21 @@ None of this applies to a PC port: we replace the whole Android/Java layer ourse
 
 | # | question | how to find out |
 |---|---|---|
-| Q1 | Which `JNIEnv` functions does the native code use? | **Partly answered (1c):** so far only `NewGlobalRef` + `GetStaticMethodID`. The rest appear once `Gangster2.nativeInit`/`nativeRender` run (Phase 2a) |
+| Q1 | Which `JNIEnv` functions does the native code use? | **Answered for boot→title (2a/2b):** `NewGlobalRef`, `GetStaticMethodID`, `CallStaticIntMethod`, `CallStaticVoidMethod`, `NewStringUTF`. Gameplay may add more (byte arrays for VZ strings, etc.); the fake JNI logs any new one |
 | Q2 | Is each callback really looked up on the `jclass` from its class's `nativeInit`? | **Answered (1c): yes**, after `NewGlobalRef(jclass)`. No `FindClass` |
 | Q3 | Which overloads does native request? | **Answered (1c):** `loadSound (II)V`, `loadSoundBig (I)V`, `getResourceFull (Ljava/lang/String;)[B` |
 | Q4 | What do the 448 init_array constructors call? | **Answered (1b):** atexit/guards/mutexes/string copies/12 KB sbrk; no threads, files or GL |
 | Q5 | How big must the `sbrk` heap be, and does any libc-allocated memory reach the game's `free`? | 12 KB after static init. Probe HLE `strdup` already allocates with the game's own `malloc`; watch the full boot in Phase 2a |
 | Q6 | What does each StormGLOFT hook change (e.g. `nativeResize`, `UseMipMaps`, `GetLowResFarPlane`)? | Ghidra on libStormGLOFT `JNI_OnLoad` + hook bodies (Ghidra not installed yet) |
-| Q7 | What do the demo/trial (`DisableLaunchGame`, `unlockDemo`) and VZ billing callbacks need to return for the normal game flow? | Ghidra on the native callers; probe in Phase 2 |
+| Q7 | What do the demo/trial (`DisableLaunchGame`, `unlockDemo`) and VZ billing callbacks need to return for the normal game flow? | Boot currently passes `isDemo=1`, which is what Java passes on a fresh install (`playMode` pref defaults to 0). None of these callbacks were called up to the title screen. **How the port should treat the trial/Verizon purchase gate is the owner's decision**; it will matter once the menus run |
 | Q8 | The 227 `mov pc, reg` jump tables: one GCC pattern or several? | Script over the disassembly (Phase 4 prep) |
 | Q9 | Did this APK + data last run on the owner's device in Sept 2025 (InsTime)? If such a device still exists, it could be used to trace real JNI/GL calls (Frida/jnitrace). | Ask the owner |
-| Q10 | Exact bionic layouts needed for `__sF` (FILE), `_ctype_` tables, `jmp_buf`, `struct stat`, `dirent` | Implemented in the probe from the Android 2.x headers (`tools/probe/bionic.py`, `hle_libc.py` docstring). `sysconf` constants confirmed by the game's own calls. **`_ctype_` pointer-vs-table still unverified**: the probe watches it, but nothing has read it yet (Phase 2a will). Cross-check against AOSP bionic source when convenient |
-| Q11 | Restore the 40 renamed sounds with an alias table, or keep the original's silent failures? | Owner's call in Phase 3 (audio). List in §6a |
-| Q12 | Where is the `FileManager` singleton created, and what else must `Gangster2.nativeInit` find (files, GL) before `nativeRender` works? | Phase 2a headless boot in the probe |
+| Q10 | Exact bionic layouts needed for `__sF` (FILE), `_ctype_` tables, `jmp_buf`, `struct stat`, `dirent` | **`_ctype_`/`_tolower_tab_` pointer layout confirmed (2a).** `sysconf` constants confirmed by the game's own calls. `struct stat`/`dirent`/`struct tm` follow the Android 2.x headers but haven't been exercised yet (no `stat` success path, no `opendir` so far); check against AOSP bionic source when they are |
+| Q11 | Restore renamed sounds, or keep the original's silent failures? | Owner's call in Phase 3 (audio). 2a shows a per-slot "use whichever name exists" rule recovers 41 sounds (1,669 → 1,710) |
+| Q12 | Where is the `FileManager` singleton created? | **Answered (2a):** `Application::PostPostInit` ("Initializing file manager..."), during the first frames |
+| Q13 | How do we run the `vox::funcUpdate` audio thread safely (second Unicorn instance on a host thread; real mutexes/condition variables in the pthread HLE)? | Phase 3 |
+| Q14 | Which performance profile should the PC build use? The game picks "Lower Setting Profile1" and disables mipmaps for an unknown phone (`nativeGetDeviceType`, `UseMipMaps`, exactly what StormGLOFT hooked). `PhonePerformanceProfiles.gmap` holds the options | Ghidra on `nativeGetDeviceType` / `GetLowResFarPlane` / `UseMipMaps`; Phase 3 |
+| Q15 | Are the 14 missing `*.english.*.glyph` files and `dummy.tga` optional (the phone data lacked them too)? Does text still render everywhere? | Watch text in menus during Phase 3 |
 
 ## 10. Glossary (RE terms as they come up)
 
@@ -404,3 +471,14 @@ None of this applies to a PC port: we replace the whole Android/Java layer ourse
   never called by Java, so the check became "native count vs Java's hard-coded table".
 - Findings: §6a. New open questions Q11, Q12.
 - Next: Phase 2 proposal in `PLAN.md`. Waiting for the owner's OK.
+
+### 2026-11-18: Phase 2 complete (title screen renders natively)
+- Owner OK'd Phase 2 and Visual Studio. Installed VS Community 2026 (C++ workload + Clang), SDL2 via
+  vcpkg, Pillow (pip). Unicorn C library taken from the pip wheel (same build as the probe).
+- 2a: probe boots the whole startup + 60/1,500 frames headless with a recording fake GL (`gl.py`);
+  added real `sscanf` and path normalisation to the probe HLE. Findings §6b.
+- 2b: wrote the C++ runtime (`src/`): fastmem memory, ELF loader, Unicorn CPU, HLE libc/stdio, fake
+  JNI, GLES1→GL bridge, frame loop with screenshots. Self-test matches the probe; `--run` shows the
+  content warning and then the title screen at ~90-100 fps. Findings §6b.
+- New open questions Q13-Q15; Q1, Q10 (mostly), Q12 answered.
+- Next: Phase 3 proposal in `PLAN.md` (input first). Waiting for the owner's OK.

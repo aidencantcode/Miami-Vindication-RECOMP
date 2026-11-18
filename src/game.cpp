@@ -100,7 +100,14 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
         native("GameRenderer_nativeInit", {env, c_gr, 1});
         native("GameRenderer_nativeResize", {env, c_gr, kW, kH});
 
-        if (opt.shot_every) fs::create_directories(paths.root / "build" / "shots");
+        // Each run gets its own screenshot folder: build/shots/run_<unix time>/
+        const fs::path shot_dir = paths.root / "build" / "shots" /
+                                  ("run_" + std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
+                                                std::chrono::system_clock::now().time_since_epoch()).count()));
+        if (opt.shot_every) {
+            fs::create_directories(shot_dir);
+            LOG("screenshots -> %s", shot_dir.string().c_str());
+        }
         bool running = true;
         auto last_report = std::chrono::steady_clock::now();
         int frames_since = 0;
@@ -113,7 +120,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
             if (opt.shot_every && (frame % opt.shot_every == 0 || frame == opt.frames - 1)) {
                 char path[64];
                 std::snprintf(path, sizeof path, "frame_%05d.bmp", frame);
-                gles1::screenshot((paths.root / "build" / "shots" / path).string().c_str(), kW, kH);
+                gles1::screenshot((shot_dir / path).string().c_str(), kW, kH);
             }
             SDL_GL_SwapWindow(win);
             ++frames_since;

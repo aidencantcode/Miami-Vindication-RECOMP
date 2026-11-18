@@ -111,7 +111,18 @@ into the portable Python). Nothing else.
 If so, 1c reports exactly which import/JNI call it stopped at, and we adjust.
 
 ---------------------------------------------------------------------------
-## 🟡 Phase 2: from "init runs" to "first frame on screen" (proposed; waiting for owner OK)
+## ✅ Phase 2: from "init runs" to "first frame on screen" (done 2026-11-18)
+
+- [x] 2a headless full boot in the probe: startup + 60 frames (and a 1,500-frame run reaching the
+      city load), no faults, no stubs; complete JNI/GL/file surface for boot (`analysis/probe_2a.md`)
+- [x] 2b C++ runtime with Visual Studio 2026: boots identically to the probe and renders the
+      **content-warning screen and the title screen** in a window at ~90-100 fps (NOTES §6b)
+- Deviation: 2a was planned with `isDemo=0`; it runs with `isDemo=1`, which is what Java actually
+  passes on a fresh install (NOTES Q7). It went further than the 2b goal (loading screen): title screen.
+
+The original Phase 2 proposal is kept below for reference.
+
+### (as proposed) Phase 2: from "init runs" to "first frame on screen"
 
 Split in two so the C++ work starts from a fully mapped surface instead of guesses.
 
@@ -149,12 +160,32 @@ for targeted RE.
 - ✔ when the same boot sequence as 2a runs in the C++ build and the first game-drawn frame
   (loading screen) appears in the window.
 
-## ⬜ Later phases (tentative; refine after Phase 2)
+## 🟡 Phase 3: playable under emulation (proposed; waiting for owner OK)
 
-**Phase 3: Playable under emulation.** Input (mouse/keyboard/gamepad → touch +
-keycodes), audio (`GLMediaPlayer` callbacks → Vorbis via SDL/miniaudio), intro video
-(Media Foundation), saves, threads. Study the StormGLOFT hook list (resize, touch,
-device type, mipmaps, draw distance) for resolution/aspect fixes.
+Goal: from the title screen into the menus and the first mission, with sound, on Windows.
+Each step is small, committed separately, and verified with screenshots + the runtime log.
+
+- **3a Input.** Mouse → `GameGLSurfaceView.nativeOnTouch(action, x, y, pointerId)` (down/move/up,
+  window coordinates scaled to 800×480); keyboard → Android keycodes via `nativeKeyDown/Up`
+  (Back = Esc, Menu = Tab, ...). ✔ when a click passes "Touch the screen to continue" and the main
+  menu (gameswf `newmenu.fua`) renders and reacts to clicks.
+- **3b Threads.** Run `vox::funcUpdate` on a host thread with its own Unicorn instance; real
+  mutexes/condition variables/TLS in the pthread HLE (Q13). ✔ when the vox thread runs alongside the
+  render thread for minutes without deadlocks or faults.
+- **3c Audio.** Implement the `GLMediaPlayer` callbacks (SoundPool-style effects + MediaPlayer-style
+  streams) with SDL audio + an Ogg Vorbis decoder (stb_vorbis); sound-name resolution rule per Q11
+  (owner's choice). ✔ when menu music and click sounds play.
+- **3d Device profile & quality.** Decide the performance profile and mipmaps (Q14), using what the
+  StormGLOFT hooks changed (`nativeGetDeviceType`, `UseMipMaps`, `GetLowResFarPlane`,
+  `glf::App::Init`, `nativeResize`, touch). Optional: Ghidra for these few functions.
+- **3e Saves & settings.** `Gangstar2.sav` / `.preferences` persist in `work/sandbox/data/` (later a
+  proper user folder); verify a save survives a restart.
+- **3f Window.** Resizable window / fullscreen with aspect-correct scaling (render at 800×480 into an
+  FBO and scale, or let the game render at the window size via `nativeResize`).
+- **Owner decisions needed along the way:** Q7 (trial/Verizon purchase gate) and Q11 (sound names).
+- Intro video (`intro.m4v`, H.264) is deferred: the game already continues when `isMediaPlaying` is 0.
+
+## ⬜ Later phases (tentative; refine after Phase 3)
 
 **Phase 4: Static recompiler (approach B).** Python tool: symbols + mapping symbols →
 one C function per ARM/Thumb function; CPU-state struct; indirect calls through an
