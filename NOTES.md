@@ -52,8 +52,24 @@ final build once the game is statically recompiled (Phase 4).
 
 Native build: `.\tools\build.ps1` (or open the folder in Visual Studio; `CMakePresets.json`).
 Run: `build\win-x64\RelWithDebInfo\gangstar.exe --run [--frames N] [--shot-every K] [--demo 0|1]`,
-`--selftest-load`, `--window`. Log: `build\runtime.log`. Screenshots: `build\shots\run_<time>\`
-(convert with `python -I tools\shots_to_png.py`).
+`--selftest-load`, `--selftest-fastpath`, `--window`. Log: `build\runtime.log`. Screenshots:
+`build\shots\run_<time>\` (convert with `python -I tools\shots_to_png.py`).
+More run options (Phase 3): `--seconds S`, `--shots-at 650,t62.5` (frames or seconds), `--input
+"<script>"`, `--fps N` (0 = unlimited), `--no-vsync`, `--game-size WxH`, `--quality
+phone|low|high|ultra`, `--touch-controls show|hide|auto`, `--dump-hud S` (log the HUD controls at S
+seconds), `--profile-traps` (busiest imports + hook calls every 2 s), `--profile-guest S` (guest
+instruction profile from S seconds), `--no-mods` (vanilla game, no hooks).
+**Input script** (`;`-separated, each `frame:cmd` or `t<seconds>:cmd`, at most one step per frame):
+`tap x y`, `down/move/up x y` (game pixels, e.g. 854×480), `key <android keycode>`,
+`pad <a|b|x|y|lb|rb|lt|rt|start|back|up|down|left|right> <0|1>`, `stick <l|r> <x> <y>` (−100..100).
+Script that reaches gameplay from a fresh start (generous waits for loads):
+`t20:tap 427 300; t32:tap 200 210; t44:tap 800 35; t48:tap 800 35; t52:tap 800 35; t56:tap 800 35`
+(title → CONTINUE → skip the intro cutscene). Gameplay by ~t60. Then e.g. `t61:pad y 1;
+t62:stick l 0 -100; t65:stick l -100 0; t67:stick l 0 0; t70:pad y 0` usually ends in the car.
+Walks are timing-sensitive (frame rate varies), so prefer "hold" commands to exact paths.
+Ghidra: `.\tools\decompile.ps1 -Out analysis\raw\X.c -Names "sym1","callers:sym2",...` (query
+forms in `tools\ghidra\DecompileFunctions.java`). Ghidra address = lib offset + 0x10000.
+Settings: `work\user\settings.ini` (written with defaults on first run).
 | Temurin JDK | 21.0.13+9 | `jdk-21.0.13+9\` |
 | jadx | 1.5.6 | `jadx\bin\jadx.bat` |
 
@@ -65,7 +81,11 @@ u need pip python everything". This replaces CLAUDE.md's "ask before installing"
 still ask before deleting files or changing the approach. Keep installs portable under
 `devtools\`, verify checksums, record versions here.
 
-**Not installed yet:** Ghidra (JDK 21 is ready for it), ANGLE, ADB/Frida, 7-Zip (not needed;
+**Installed in Phase 3:** Ghidra 12.2 (`ghidra_12.2_PUBLIC\`), which needs **JDK 25** (Temurin
+25.0.5+8, `jdk-25.0.5+8\`; set as `JAVA_HOME_OVERRIDE` in Ghidra's `support\launch.properties`).
+The analysed project is `analysis\ghidra\Gangstar` (git-ignored). Headless use: `tools\decompile.ps1`.
+
+**Not installed yet:** ANGLE, ADB/Frida, 7-Zip (not needed;
 zip handled by .NET). (CMake, Ninja, Clang and MSVC now come with Visual Studio; see below.)
 
 Git: repo-local identity `Aiden <owner's email>` (set with `git config`, not global).
@@ -341,6 +361,106 @@ PC = svc+4; writing PC (with the Thumb bit) from a hook redirects execution; nes
 `emu_start` from inside a hook works (used to call the game's own `malloc` from HLE
 `strdup`, and comparators from `qsort`).
 
+## 6c. Phase 3 results (playable under emulation, Windows)
+
+### CPU speed: guest-side float helpers
+- The game is soft-float, so every float operation is a call to `__aeabi_fadd` and friends. Trapping
+  those to C++ cost 4M traps/s and gameplay ran at ~12 fps. The CPU model is now **Cortex-A15**
+  (ARMv7 + VFPv4 + SDIV; VFP enabled through CPACR/FPEXC), and `src/cpu/fastpath.S` implements 35
+  EABI helpers + `sqrt/sqrtf` as **guest VFP code** mapped at `0x0E080000` (the imports resolve
+  there). Assembled by VS clang (`tools/gen_fastpath.py` → `fastpath_code.inc`). `--selftest-fastpath`
+  checks every helper bit-exact against host IEEE math. Traps dropped to ~80k/s.
+- **Gameplay speed under Unicorn: ~20-40 fps**, depending on the scene (traffic, NPCs, camera). The same
+  spot can measure 21 or 37 fps on different runs, so compare A/B runs on the same build, never against
+  old numbers. "game ms/frame" in the log is time inside `nativeRender`.
+- Guest profile (`--profile-guest`): ~55% of executed instructions are float-call overhead (helpers
+  ~35%, PLT stubs ~20%); the rest is skinning, culling and Box2D. **120+ fps in gameplay needs the
+  static recompiler (Phase 4)**; emulation won't get there.
+- Some game states (menus, title) run at ~128 fps uncapped. Whether the game has its own frame limiter
+  is open (Q20).
+- Unicorn check (`hookbench.py` experiment): bounded `UC_HOOK_CODE` hooks cost nothing for code outside
+  the hooked addresses. Function hooks are cheap (~500 calls/s in gameplay).
+
+### Display: virtual framebuffer (`gles1::vfb_*`)
+- The game is always told **height 480**, width = 480 × aspect (640..1280). 800 and 854 lay out correctly.
+  At 1280×720 the UI breaks (it is authored for 480 high).
+- It draws into an FBO of logical × scale (auto scale = ceil(window height / 480)) with optional MSAA.
+  glViewport/glScissor/point size/line width are scaled; glReadPixels/glCopyTexImage2D are translated.
+  The present step blits into the window (aspect / stretch / integer fit) and saves/restores the GL state it touches.
+- Overlays (menu cursor) are scissored clears after the present, so no game GL state is touched.
+
+### Graphics profile (Q14 answered)
+- `GS3DStuff::setPerformanceType(renderer)` picks `s_perfConfig` from `PhonePerformanceSelector.array`
+  ("PowerVR MBX" → 0, "PowerVR SGX" → 1; anything else → 0). `GS3DStuff::loadPerformanceProfile` loads
+  entry `s_perfConfig` of `PhonePerformanceProfiles.gmap` into **`gPhonePerf`** (44 bytes): 10 flag bytes
+  (+0x04 = mipmaps, read by `UseMipMaps()`); +0x0C texture streaming radius (7500/12000); +0x10 low-res
+  city far plane (20000/60000, `GetLowResFarPlane()`); +0x14, +0x18 unknown; +0x1C/+0x20/+0x24 max NPCs per
+  spawn-zone type (3,3,2 / 10,10,10); +0x28/+0x29 flags (+0x29 = `_lo`/`_hi` asset variants; none exist).
+- The phone (and our "NVIDIA Tegra" string) gets profile 0. The `quality` setting forces it:
+  phone = untouched, low = 0, high = 1, ultra = 1 + 1.5× NPCs. Then `draw_distance` multiplies +0x0C/+0x10,
+  and `mipmaps` sets +0x04. Verified in the log line `graphics profile (high): index 1, ...`.
+  Not yet compared visually (draw distance A/B screenshots are still to do).
+
+### Function hooks (`rt::Runtime::hook_function`)
+- A bounded Unicorn code hook on a game function's entry. `pre` can skip the function (PC = LR; it must
+  set r0 itself if needed). `post` runs on return: LR is swapped for a `<post-hook>` trap, with a
+  per-CPU return stack. Game-specific hooks live in `src/game/mods.cpp`.
+
+### HUD and touch controls
+- `CHudManager::load` (r0 = the manager, captured by a hook) creates the on-screen controls at fixed
+  fields: +0x28 AnalogStick (v-stick), +0x2C Wheel, +0x54/+0x58 SlideControl, +0x74 ToggleButton,
+  +0x7C/+0x94 AnimatedButton, the rest VirtualButton (full table in `mods.cpp`).
+- `HudElement`: flags at +0x0C (bit 0 = visible), touch rect x0,y0,x1,y1 floats at +0x10 in **480×320
+  authoring space**, scaled by screen/480 and screen/320 (`Application::GetScreenScaleFactors`).
+  VirtualButton/AnimatedButton: `ButtonType` at +0x58.
+- **ButtonType** (from the `OnFoot`/`Driving`/`Flying`/`Sniper` `ControlHandler::handleVirtualButton`
+  jump tables): 0 attack, 2 enter/exit car, 3 enter shop, 4 accelerate, 5 brake (driving: the vehicle's
+  virtual calls with 1.0f), 7/8 next/prev weapon, 9 mini-map, 10 radio toggle, 11 radio, 12 (seen,
+  unknown), 13 side mission start, 14 take cover, 15 sprint, 16 mini-save.
+- On foot the visible set is: v-stick, attack (+0x50), cover (+0x6C), and context buttons that appear
+  near things (enter car +0x48, shop +0x4C, ...). Driving (tilt mode): accelerate +0x40 (bottom right),
+  brake +0x44 (bottom left), exit car +0x64. No steering control is shown in tilt mode.
+- Touch path: `nativeOnTouch(action 1 down / 2 move / 0 up, x, y, jlong id)` → `appOnTouch` →
+  `AndroidAddTouchEvent` → `glf::TouchPad`. The v-stick only grabs a touch that **starts on it** and then
+  drags (EvStickMove, type 7, angle +8, magnitude +0xC). Buttons raise EvVirtualButton (type 0xD).
+  A drag on empty screen turns the camera.
+- Hiding the touch controls = skipping their `draw2d` (AnalogStick/AnimatedButton/HudElement/
+  SlideControl/SwipeButton/ToggleButton/Wheel) when the object is one of CHudManager's control fields.
+  Touch hit-testing is unaffected.
+
+### Steering / accelerometer
+- `Gangster2.nativeAccelerometer(x, y, z)` (raw m/s², Java `onSensorChanged`) stores x/−10, y/−10 and
+  z/10 − 1.5 (the last one is unconfirmed: Ghidra cut the function short) into `mAccelerometerX/Y/Z`.
+  The values reach handlers as `EvAcceleration`.
+- `CHudManager::setSteeringMode` (+0x1C): **0x800000 = tilt** (the default; the tutorial says "use the
+  pedals and tilt your device"). The other modes (0x80000, 2, else 1) are the other "control sets" in
+  Options (Q16). `Widgets::Controls::OnEvent` cycles steering mode (3 options) and throttle mode (2).
+- `DrivingControlHandler::handleAcceleration` (tilt mode): steering = sign(y) × min(|y| × 1.8, 1), written to
+  **vehicle (+4 of the handler) +0x3E4**, where −1 = left and +1 = right (verified by driving). It also
+  rolls the camera with the tilt, and pitch has a neutral band of 0.22..0.78.
+- Controller/keyboard steering in tilt mode: the handler is replaced while virtual steering is on
+  (writes +0x3E4 directly, clears +0x3E8 and [+0x280]+0x448 like the original). A neutral accelerometer
+  reading is fed every frame so the handler runs. There is no camera roll. Verified left and right.
+
+### Input design (`src/input/`)
+- Keyboard and controller fill an abstract `GameInput` (move, camera, 15 actions). That state becomes
+  **virtual touches** on whatever controls the game currently shows (live positions from CHudManager),
+  so the game's own context logic decides what a button does. It works the same with the HUD hidden
+  and on Android. Pointer ids: 0 mouse, 1 stick/cursor, 2 camera, 3-9 buttons.
+- Held actions (attack, sprint, pedals, cover) hold the touch. One-shot actions (car, interact, map,
+  radio, weapons) tap once per press, or as soon as their button appears while the key is still held.
+- Menus/cutscenes (no gameplay control visible): the stick/d-pad moves a drawn cursor and A taps.
+  Start/Esc = Android BACK (in gameplay: opens the pause/map menu; in that menu: the game's own "quit
+  to main menu?" dialog). Tab = MENU.
+- Mapping (controller): LS move/steer, RS camera, RT attack / accelerate, LT cover / brake, A sprint
+  (menus: confirm), B cover (driving: attack/drive-by; menus: BACK), X interact (shop / side mission /
+  mini-save), Y enter/exit car, LB/RB previous/next weapon, Back map, d-pad up radio, d-pad right next
+  station. Keyboard: WASD/arrows move (W/S = pedals when driving), Space/LCtrl attack, Shift sprint,
+  F car, E interact, Q cover, M map, R/T radio, 1/2 or mouse wheel weapons, right mouse drag camera,
+  Enter confirm, Esc/Backspace BACK, Tab MENU. Left mouse = touch.
+- `touch_controls = auto` hides the touch HUD while a pad/keyboard drives and shows it again on a
+  mouse click (touch).
+
 ## 7. Data folder (`original/gameloft/games/Gangstar2/`)
 
 Flat folder (no subdirectories), 2,405 files, 375 MB. Full table:
@@ -419,8 +539,15 @@ None of this applies to a PC port: we replace the whole Android/Java layer ourse
 | Q11 | Restore renamed sounds, or keep the original's silent failures? | Owner's call in Phase 3 (audio). 2a shows a per-slot "use whichever name exists" rule recovers 41 sounds (1,669 → 1,710) |
 | Q12 | Where is the `FileManager` singleton created? | **Answered (2a):** `Application::PostPostInit` ("Initializing file manager..."), during the first frames |
 | Q13 | How do we run the `vox::funcUpdate` audio thread safely (second Unicorn instance on a host thread; real mutexes/condition variables in the pthread HLE)? | Phase 3 |
-| Q14 | Which performance profile should the PC build use? The game picks "Lower Setting Profile1" and disables mipmaps for an unknown phone (`nativeGetDeviceType`, `UseMipMaps`, exactly what StormGLOFT hooked). `PhonePerformanceProfiles.gmap` holds the options | Ghidra on `nativeGetDeviceType` / `GetLowResFarPlane` / `UseMipMaps`; Phase 3 |
-| Q15 | Are the 14 missing `*.english.*.glyph` files and `dummy.tga` optional (the phone data lacked them too)? Does text still render everywhere? | Watch text in menus during Phase 3 |
+| Q14 | Which performance profile should the PC build use? | **Answered (Phase 3, §6c):** user setting `quality` (default high = profile 1) + `draw_distance` + `mipmaps`, applied by hooking `loadPerformanceProfile` |
+| Q15 | Are the 14 missing `*.english.*.glyph` files and `dummy.tga` optional (the phone data lacked them too)? Does text still render everywhere? | Watch text in menus during Phase 3. So far all menu, tutorial and HUD text seen renders |
+| Q16 | Which steering mode is which (0x80000, 2, 1), and which on-screen control does each use (Wheel +0x2C, SlideControl +0x54/+0x58, buttons)? | Switch "control sets" in Options, then `--dump-hud` while driving. Input already drags a visible Wheel/SlideControl horizontally (untested) |
+| Q17 | How does weapon switching work? Types 7/8 (next/prev) never showed a visible button; the weapon selector is a HUD element at CHudManager+0xD0 | Ghidra on the WeaponSelector class + `--dump-hud` after picking up a second weapon |
+| Q18 | What are vehicle +0x3E8 and [vehicle+0x280]+0x448, which the tilt handler clears on every event? | Ghidra xrefs to those offsets in `Vehicle::` methods |
+| Q19 | Controller in the pause menu: Start/B send BACK, which opens the game's "quit to main menu?" dialog, and resuming needs the cursor on "< BACK". Map B/Start to that button? | Find the gameswf menu's back handler (RenderFX / `Widgets::`), or detect the pause menu and tap its BACK |
+| Q20 | Does the game cap its own frame rate (menus/title ran ~128 fps uncapped)? Is game timing frame-rate independent at 120-240 fps (physics, animation, Box2D steps)? | Ghidra on the main loop (`appRender`/`Application::Update` time step); measure game-time vs real-time at `--fps 30/60/144/240` |
+| Q21 | Helicopters/planes: `FlyingControlHandler::handleAcceleration` also uses tilt. Needs the same virtual-steering treatment | Reach a flying section; replicate the driving hook |
+| Q22 | Ghidra marks `__aeabi_fsub` (and likely other EABI helpers) as non-returning, which truncates functions after the call (e.g. `handleAcceleration` shows 476 of 712 bytes) | Clear "no return" on the `__aeabi_*` thunks and re-run "fix function bodies" in the project (one-off, not `-readOnly`) |
 
 ## 10. Glossary (RE terms as they come up)
 
@@ -482,3 +609,22 @@ None of this applies to a PC port: we replace the whole Android/Java layer ourse
   content warning and then the title screen at ~90-100 fps. Findings §6b.
 - New open questions Q13-Q15; Q1, Q10 (mostly), Q12 answered.
 - Next: Phase 3 proposal in `PLAN.md` (input first). Waiting for the owner's OK.
+
+### 2026-11-19: Phase 3 (in progress): fast enough to play, resolution, quality, controls
+- Owner OK'd Phase 3 and added: resolution options, keyboard + mouse + controller, a setting to hide
+  the touch controls (Windows and Android alike), a graphics profile, better draw distance, QoL.
+  Later: **120+ fps modes are required for the final game**, and **the Android port is the main focus
+  once recompilation is done** (other platforms after that).
+- Installed Ghidra 12.2 + JDK 25; wrote `tools/decompile.ps1` + `DecompileFunctions.java`.
+- Done (findings §6c): guest-side float fastpath (~12 → 20-40 fps in gameplay); Cortex-A15 model;
+  virtual framebuffer (any 480-high aspect, render scale, MSAA, fit modes); `settings.ini`;
+  borderless toggle (Alt+Enter/F11); pause on focus loss; function hooks; graphics profile + draw
+  distance; HUD control map and ButtonType enum; touch-control hiding; keyboard/controller →
+  virtual touches; menu cursor; tilt steering for pads/keys; precise fps limiter; fps in the title.
+- Verified by scripted runs + screenshots: walk, camera, enter car (hold Y), accelerate (RT), steer
+  left/right without camera roll, title screen via cursor + A, pause menu via Start, HUD auto-hide.
+- Perf A/B lesson: the same spot measures 21 or 37 fps on different runs (random traffic/NPCs), so a
+  suspected hook slowdown turned out to be scene variance. Compare runs of the same build only.
+- New open questions Q16-Q22; Q14 answered.
+- Next: FPS presets (120/144/165/240/unlimited) + check game timing at high fps (Q20); in-game
+  settings overlay (F1 / controller); audio (vox thread + GLMediaPlayer); saves; draw-distance A/B.

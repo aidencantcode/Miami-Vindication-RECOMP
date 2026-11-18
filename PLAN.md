@@ -160,30 +160,55 @@ for targeted RE.
 - ✔ when the same boot sequence as 2a runs in the C++ build and the first game-drawn frame
   (loading screen) appears in the window.
 
-## 🟡 Phase 3: playable under emulation (proposed; waiting for owner OK)
+## 🟡 Phase 3: playable under emulation (approved 2026-11-18; in progress)
 
-Goal: from the title screen into the menus and the first mission, with sound, on Windows.
+Goal: from the title screen into the menus and the first mission, with sound, on Windows,
+plus the owner's additions: resolution options, keyboard + mouse + controller, hideable touch
+controls (Windows and Android alike), graphics profile, better draw distance, QoL.
 Each step is small, committed separately, and verified with screenshots + the runtime log.
 
-- **3a Input.** Mouse → `GameGLSurfaceView.nativeOnTouch(action, x, y, pointerId)` (down/move/up,
-  window coordinates scaled to 800×480); keyboard → Android keycodes via `nativeKeyDown/Up`
-  (Back = Esc, Menu = Tab, ...). ✔ when a click passes "Touch the screen to continue" and the main
-  menu (gameswf `newmenu.fua`) renders and reacts to clicks.
-- **3b Threads.** Run `vox::funcUpdate` on a host thread with its own Unicorn instance; real
+- ✅ **3a Input (mouse/touch).** Clicks → `nativeOnTouch`; title screen, menus, cutscene skip work.
+- ✅ **Speed.** Guest-side float fastpath + Cortex-A15 model: gameplay ~12 → 20-40 fps (scene dependent).
+- ✅ **3f Window / resolution.** Virtual framebuffer: any aspect at 480 high, render scale (auto =
+  window height), MSAA, fit aspect/stretch/integer, resizable, Alt+Enter/F11 borderless, `settings.ini`.
+- ✅ **3d Graphics profile & draw distance** (Q14): `quality` phone|low|high|ultra, `draw_distance`,
+  `mipmaps`. Still to do: visual A/B screenshots (phone vs high vs ultra) and `anisotropy`.
+- ✅ **Keyboard + controller** → virtual touches on the live HUD; menu cursor; tilt steering for
+  pads/keys; touch controls hide automatically while a pad/keyboard drives (`touch_controls`).
+  Open: Q16 (other steering modes), Q17 (weapon switch), Q19 (pause-menu resume), Q21 (flying).
+- ⬜ **FPS modes.** Presets 30/60/120/144/165/240/unlimited in settings + overlay. The limiter is
+  already precise (sleep + spin). Check that game timing is frame-rate independent at high fps (Q20).
+  Under emulation, gameplay can't reach 120 (CPU-bound). That comes with Phase 4, but the setting,
+  the pacing and the timing checks belong here, so the recompiled build only has to be faster.
+- ⬜ **Settings overlay** (F1 / controller Back+Start): display, graphics, controls, FPS; writes
+  `settings.ini`. Candidate: Dear ImGui (MIT) on the GL bridge's overlay pass.
+- ⬜ **3b Threads.** Run `vox::funcUpdate` on a host thread with its own Unicorn instance; real
   mutexes/condition variables/TLS in the pthread HLE (Q13). ✔ when the vox thread runs alongside the
   render thread for minutes without deadlocks or faults.
-- **3c Audio.** Implement the `GLMediaPlayer` callbacks (SoundPool-style effects + MediaPlayer-style
+- ⬜ **3c Audio.** Implement the `GLMediaPlayer` callbacks (SoundPool-style effects + MediaPlayer-style
   streams) with SDL audio + an Ogg Vorbis decoder (stb_vorbis); sound-name resolution rule per Q11
   (owner's choice). ✔ when menu music and click sounds play.
-- **3d Device profile & quality.** Decide the performance profile and mipmaps (Q14), using what the
-  StormGLOFT hooks changed (`nativeGetDeviceType`, `UseMipMaps`, `GetLowResFarPlane`,
-  `glf::App::Init`, `nativeResize`, touch). Optional: Ghidra for these few functions.
-- **3e Saves & settings.** `Gangstar2.sav` / `.preferences` persist in `work/sandbox/data/` (later a
-  proper user folder); verify a save survives a restart.
-- **3f Window.** Resizable window / fullscreen with aspect-correct scaling (render at 800×480 into an
-  FBO and scale, or let the game render at the window size via `nativeResize`).
+- ⬜ **3e Saves.** `Gangstar2.sav` / `.preferences` persist in `work/sandbox/data/` (later a proper user
+  folder); verify a save survives a restart.
+- ⬜ **QoL.** Skip the content warning / intro where possible (`skip_intro`), anisotropic filtering,
+  FPS counter overlay. Pause on focus loss is done.
 - **Owner decisions needed along the way:** Q7 (trial/Verizon purchase gate) and Q11 (sound names).
 - Intro video (`intro.m4v`, H.264) is deferred: the game already continues when `isMediaPlaying` is 0.
+
+## Direction (owner, 2026-11-19)
+- **120 fps and higher must work in the final game** (presets up to 240 + unlimited).
+- **The Android port (arm64 handhelds) is the main focus once the recompilation is done.** Windows
+  remains the bring-up and test platform; other platforms come later.
+- Consequences for the design:
+  - Everything in `src/` except the CPU backend (HLE, JNI, GL bridge, input, settings, mods) must stay
+    portable C++ (SDL2, GL/GLES). On Android the GL bridge targets GLES 3 directly.
+  - Input already treats touch, keyboard and controller alike. On Android, real touches pass straight
+    through and controllers use the same virtual-touch layer. Real tilt can feed `nativeAccelerometer`
+    (virtual steering only replaces it while a pad steers).
+  - Game hooks (`mods.cpp`) are keyed by symbol name and must work with both CPU backends: in the
+    recompiled build a hook becomes a call at the top of the generated C function.
+  - The recompiler output must be target-neutral C/C++ (no x86 assumptions), so the same output builds
+    for x86-64 Windows and arm64 Android.
 
 ## ⬜ Later phases (tentative; refine after Phase 3)
 
@@ -191,7 +216,11 @@ Each step is small, committed separately, and verified with screenshots + the ru
 one C function per ARM/Thumb function; CPU-state struct; indirect calls through an
 address→function table; recovered jump tables; ARM↔Thumb interworking; `setjmp/longjmp`.
 Differential testing against the Phase 1/2 emulator per function. Swap the CPU backend
-⇒ the game runs as native x86-64 code.
+⇒ the game runs as native x86-64 code. Soft-float helper calls become host float ops
+(~55% of executed instructions today are float-call overhead). **Exit criterion now includes
+120+ fps in gameplay on the dev PC** (Ryzen 5 5500 / RTX 3060).
 
-**Phase 5: Android arm64 handhelds.** Same generated C + shim layer, built for arm64
-with SDL2 for Android.
+**Phase 5: Android arm64 handhelds (main target after Phase 4).** Same generated C + shim layer,
+built for arm64 with SDL2 for Android; GLES 3 backend for the GL bridge; settings UI usable with a
+controller; touch controls shown/hidden per `touch_controls`; target devices Retroid Pocket 6 /
+Odin-class at 120+ fps where the display allows.
