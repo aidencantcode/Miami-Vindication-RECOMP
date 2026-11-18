@@ -30,9 +30,10 @@ public:
 
     void handle(const SDL_Event& ev);  // window events (mouse, keyboard)
 
-    // Scripted input for automated runs: "600:tap 400 240; 900:key 4" (frame:command)
+    // Scripted input for automated runs: "600:tap 400 240; t12.5:key 4"
+    // (frame:command, or t<seconds since the first frame>:command)
     bool parse_script(const std::string& script, std::string* err);
-    void run_script(int frame);
+    void run_script(int frame, double seconds);
 
     void touch(int action, int x, int y, int pointer);
     void key(int android_keycode, bool down);
@@ -44,7 +45,7 @@ private:
     int game_w_ = 800, game_h_ = 480;
     int vp_x_ = 0, vp_y_ = 0, vp_w_ = 800, vp_h_ = 480;
     bool mouse_down_ = false;
-    struct Step { int frame; std::string cmd; int a, b; };
+    struct Step { int frame; double time; std::string cmd; int a, b; bool done; };
     std::vector<Step> script_;
 };
 

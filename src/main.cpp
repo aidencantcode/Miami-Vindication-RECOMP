@@ -88,10 +88,14 @@ int main(int argc, char** argv) {
     RunOptions opt;
     for (int i = 1; i < argc; ++i)
         if (!std::strcmp(argv[i], "--profile-traps")) opt.profile_traps = true;
+        else if (!std::strcmp(argv[i], "--no-vsync")) opt.no_vsync = true;
     for (int i = 1; i + 1 < argc; ++i) {
         if (!std::strcmp(argv[i], "--frames")) frames = opt.frames = std::atoi(argv[i + 1]);
         if (!std::strcmp(argv[i], "--shot-every")) opt.shot_every = std::atoi(argv[i + 1]);
         if (!std::strcmp(argv[i], "--demo")) opt.demo = std::atoi(argv[i + 1]);
+        if (!std::strcmp(argv[i], "--fps")) opt.fps = std::atoi(argv[i + 1]);
+        if (!std::strcmp(argv[i], "--seconds")) opt.seconds = std::atof(argv[i + 1]);
+        if (!std::strcmp(argv[i], "--profile-guest")) opt.profile_guest_at = std::atof(argv[i + 1]);
         if (!std::strcmp(argv[i], "--input")) opt.input = argv[i + 1];
         if (!std::strcmp(argv[i], "--shots-at")) opt.shots_at = argv[i + 1];
         if (!std::strcmp(argv[i], "--game-size")) std::sscanf(argv[i + 1], "%dx%d", &opt.game_w, &opt.game_h);

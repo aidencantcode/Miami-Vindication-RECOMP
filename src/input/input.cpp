@@ -95,11 +95,20 @@ bool Input::parse_script(const std::string& script, std::string* err) {
     std::stringstream ss(script);
     std::string item;
     while (std::getline(ss, item, ';')) {
-        Step s{};
+        size_t colon = item.find(':');
+        if (colon == std::string::npos) {
+            *err = "bad input script item '" + item + "' (expected 'frame:cmd ...' or 't<sec>:cmd ...')";
+            return false;
+        }
+        std::string when = item.substr(0, colon);
+        while (!when.empty() && when.front() == ' ') when.erase(0, 1);
+        Step s{-1, -1.0, "", 0, 0, false};
+        if (!when.empty() && when[0] == 't') s.time = std::atof(when.c_str() + 1);
+        else s.frame = std::atoi(when.c_str());
         char cmd[16] = {};
-        int n = std::sscanf(item.c_str(), " %d : %15s %d %d", &s.frame, cmd, &s.a, &s.b);
-        if (n < 3) {
-            *err = "bad input script item '" + item + "' (expected 'frame:tap x y' or 'frame:key code')";
+        int n = std::sscanf(item.c_str() + colon + 1, " %15s %d %d", cmd, &s.a, &s.b);
+        if (n < 2) {
+            *err = "bad input script item '" + item + "' (expected 'tap x y' or 'key code')";
             return false;
         }
         s.cmd = cmd;
@@ -108,21 +117,29 @@ bool Input::parse_script(const std::string& script, std::string* err) {
             return false;
         }
         script_.push_back(s);
-        if (s.cmd == "tap") script_.push_back({s.frame + 3, "up", s.a, s.b});  // release 3 frames later
-        if (s.cmd == "key") script_.push_back({s.frame + 3, "keyup", s.a, 0});
+        // release 3 frames / 0.1 s later
+        Step rel = s;
+        if (rel.frame >= 0) rel.frame += 3; else rel.time += 0.1;
+        if (s.cmd == "tap") { rel.cmd = "up"; script_.push_back(rel); }
+        if (s.cmd == "key") { rel.cmd = "keyup"; script_.push_back(rel); }
     }
     return true;
 }
 
-void Input::run_script(int frame) {
-    for (const Step& s : script_) {
-        if (s.frame != frame) continue;
-        LOG("[input] frame %d: %s %d %d", frame, s.cmd.c_str(), s.a, s.b);
+void Input::run_script(int frame, double seconds) {
+    // Steps run in order, at most one per frame, so a long frame (e.g. a loading hitch)
+    // cannot collapse several taps into one frame.
+    for (Step& s : script_) {
+        if (s.done) continue;
+        if (s.frame >= 0 ? s.frame > frame : seconds < s.time) break;
+        s.done = true;
+        LOG("[input] frame %d (%.1f s): %s %d %d", frame, seconds, s.cmd.c_str(), s.a, s.b);
         if (s.cmd == "tap" || s.cmd == "down") touch(1, s.a, s.b, 0);
         else if (s.cmd == "move") touch(2, s.a, s.b, 0);
         else if (s.cmd == "up") touch(0, s.a, s.b, 0);
         else if (s.cmd == "key") key(s.a, true);
         else if (s.cmd == "keyup") key(s.a, false);
+        break;
     }
 }
 

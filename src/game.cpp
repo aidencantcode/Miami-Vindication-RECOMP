@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <unordered_map>
 #include <vector>
 #include <exception>
 #include <filesystem>
@@ -68,6 +69,8 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     } else {
         LOG("settings: loaded %s", settings_file.string().c_str());
     }
+    if (opt.fps >= 0) cfg.fps_limit = opt.fps;  // command-line overrides (not saved)
+    if (opt.no_vsync) cfg.vsync = false;
 
     // ---- window + GL ------------------------------------------------------------------------------
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) FATAL("SDL_Init: %s", SDL_GetError());
@@ -162,13 +165,18 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
         const fs::path shot_dir = paths.root / "build" / "shots" /
                                   ("run_" + std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
                                                 std::chrono::system_clock::now().time_since_epoch()).count()));
-        std::set<int> shots_at;
+        std::set<int> shots_at;          // frame numbers
+        std::vector<double> shots_at_t;  // seconds since the first frame ("t12.5")
         {
             std::stringstream ss(opt.shots_at);
             std::string tok;
-            while (std::getline(ss, tok, ',')) if (!tok.empty()) shots_at.insert(std::atoi(tok.c_str()));
+            while (std::getline(ss, tok, ','))
+                if (!tok.empty()) {
+                    if (tok[0] == 't') shots_at_t.push_back(std::atof(tok.c_str() + 1));
+                    else shots_at.insert(std::atoi(tok.c_str()));
+                }
         }
-        if (opt.shot_every || !shots_at.empty()) {
+        if (opt.shot_every || !shots_at.empty() || !shots_at_t.empty()) {
             fs::create_directories(shot_dir);
             LOG("screenshots -> %s", shot_dir.string().c_str());
         }
@@ -181,8 +189,12 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
         }
 
         bool running = true, paused = false;
+        const auto loop_start = Clock::now();
+        bool profiling = false;
         auto last_report = Clock::now(), frame_start = Clock::now();
         int frames_since = 0;
+        std::unordered_map<uint32_t, uint64_t> block_counts;
+        double game_ms = 0;  // time inside nativeRender (emulated game code + GL calls) since last report
         for (; running && (opt.frames <= 0 || frame < opt.frames); ++frame) {
             frame_start = Clock::now();
             SDL_Event ev;
@@ -208,16 +220,29 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 }
                 in.handle(ev);
             }
-            in.run_script(frame);
+            const double since_start = std::chrono::duration<double>(Clock::now() - loop_start).count();
+            if (opt.seconds > 0 && since_start >= opt.seconds) break;
+            if (opt.profile_guest_at >= 0 && since_start >= opt.profile_guest_at && !profiling) {
+                LOG("guest profiler: on (frames run much slower while it is active)");
+                cpu.enable_block_profile(&block_counts);
+                profiling = true;
+            }
+            in.run_script(frame, since_start);
             if (frame == 0) native("Gangster2_nativeResume", {env, c_g2});
+            const auto t_game = Clock::now();
             cpu.call(rt.lib_func("Java_com_gameloft_android_GAND_GloftGMHP_ML_GameRenderer_nativeRender"), {env, c_gr});
+            game_ms += std::chrono::duration<double, std::milli>(Clock::now() - t_game).count();
 
             // present the game image into the window
             SDL_GL_GetDrawableSize(win, &dw, &dh);
             int rx, ry, rw, rh;
             gles1::vfb_present(dw, dh, fit_of(cfg.fit), cfg.smooth_scaling, &rx, &ry, &rw, &rh);
             in.set_viewport(rx, ry, rw, rh);
-            if ((opt.shot_every && (frame % opt.shot_every == 0 || frame == opt.frames - 1)) || shots_at.count(frame)) {
+            bool shot_time = false;
+            for (double& t : shots_at_t)
+                if (t >= 0 && since_start >= t) { shot_time = true; t = -1; }
+            if ((opt.shot_every && (frame % opt.shot_every == 0 || frame == opt.frames - 1)) || shots_at.count(frame) ||
+                shot_time) {
                 char name[64];
                 std::snprintf(name, sizeof name, "frame_%05d.bmp", frame);
                 gles1::screenshot((shot_dir / name).string().c_str(), dw, dh);
@@ -232,8 +257,10 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
             ++frames_since;
             double dt = std::chrono::duration<double>(Clock::now() - last_report).count();
             if (dt >= 2.0) {
-                LOG("frame %d: %.1f fps, %llu draw calls total, heap %u KB", frame, frames_since / dt,
+                LOG("frame %d: %.1f fps, game %.1f ms/frame, %llu draw calls total, heap %u KB", frame,
+                    frames_since / dt, frames_since ? game_ms / frames_since : 0.0,
                     (unsigned long long)gles1::draw_calls(), (rt.brk() - layout::kSbrkBase) / 1024);
+                game_ms = 0;
                 if (opt.profile_traps) {
                     // busiest import traps since the last report (per second)
                     static std::vector<uint64_t> prev;
@@ -257,6 +284,23 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
             }
         }
         LOG("stopped after %d frames", frame);
+        if (profiling) {
+            // Aggregate block counts per game function (or per trap/fastpath region).
+            std::unordered_map<std::string, uint64_t> per_fn;
+            uint64_t total = 0;
+            for (const auto& [addr, n] : block_counts) {
+                total += n;
+                std::string w = cpu.where(addr);
+                size_t plus = w.rfind('+');
+                per_fn[plus != std::string::npos && w.compare(0, 4, "lib+") != 0 ? w.substr(0, plus) : w] += n;
+            }
+            std::vector<std::pair<uint64_t, std::string>> top;
+            for (auto& [k, v] : per_fn) top.push_back({v, k});
+            std::sort(top.rbegin(), top.rend());
+            LOG("guest profile: %llu instructions sampled; top functions:", (unsigned long long)total);
+            for (size_t i = 0; i < top.size() && i < 40; ++i)
+                LOG("  %5.1f%%  %s", 100.0 * top[i].first / total, top[i].second.c_str());
+        }
     } catch (const std::exception& e) {
         LOG("FATAL at frame %d: %s", frame, e.what());
         rc = 1;

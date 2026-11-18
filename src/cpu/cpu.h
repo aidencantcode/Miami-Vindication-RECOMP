@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <string>
+#include <unordered_map>
 
 struct uc_struct;
 
@@ -69,6 +70,9 @@ public:
     uint64_t call(uint32_t addr, std::initializer_list<uint32_t> args = {},
                   std::initializer_list<uint32_t> stack_args = {});
 
+    // Profiling: count executed instructions per basic-block start address (slow; diagnostics only).
+    void enable_block_profile(std::unordered_map<uint32_t, uint64_t>* counts);
+
     // Diagnostics
     std::string where(uint32_t addr) const;
     std::string dump() const;
@@ -76,6 +80,8 @@ public:
 private:
     static void on_intr(uc_struct* uc, uint32_t intno, void* self);
     static bool on_bad_mem(uc_struct* uc, int type, uint64_t addr, int size, int64_t value, void* self);
+    static void on_block(uc_struct* uc, uint64_t addr, uint32_t size, void* self);
+    std::unordered_map<uint32_t, uint64_t>* block_counts_ = nullptr;
     void fail(const char* what);
 
     rt::Runtime& rt_;

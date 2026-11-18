@@ -173,6 +173,19 @@ bool Cpu::on_bad_mem(uc_struct*, int type, uint64_t addr, int size, int64_t, voi
     return false;
 }
 
+void Cpu::on_block(uc_struct*, uint64_t addr, uint32_t size, void* self_) {
+    // Thumb-1 instructions are 2 bytes, ARM 4; size/2 is close enough for a profile.
+    (*static_cast<Cpu*>(self_)->block_counts_)[uint32_t(addr)] += size / 2;
+}
+
+void Cpu::enable_block_profile(std::unordered_map<uint32_t, uint64_t>* counts) {
+    block_counts_ = counts;
+    uc_hook h;
+    check_uc(uc_hook_add(uc_, &h, UC_HOOK_BLOCK, reinterpret_cast<void*>(&Cpu::on_block), this, 1, 0), "hook block");
+    // Re-translate everything so blocks compiled before the hook existed are counted too.
+    check_uc(uc_ctl_flush_tb(uc_), "flush translation cache");
+}
+
 uint64_t Cpu::call(uint32_t addr, std::initializer_list<uint32_t> args, std::initializer_list<uint32_t> stack_args) {
     const bool nested = depth_ > 0;
     uc_context* ctx = nullptr;

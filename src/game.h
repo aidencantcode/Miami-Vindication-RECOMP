@@ -11,6 +11,10 @@ struct RunOptions {
     std::string shots_at;  // extra screenshot frames, e.g. "650,700,900"
     int game_w = 0, game_h = 480;  // override the game's screen width (0 = from settings/window aspect)
     bool profile_traps = false;      // log the busiest import traps every 2 s
+    int fps = -1;                    // override settings fps_limit (0 = unlimited)
+    bool no_vsync = false;           // override settings vsync
+    double seconds = 0;              // stop after this many seconds (0 = no limit)
+    double profile_guest_at = -1;    // start the guest instruction profiler at this time (s)
 };
 
 int run_game(const rt::Paths& paths, const RunOptions& opt);
