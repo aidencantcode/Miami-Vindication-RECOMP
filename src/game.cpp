@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <unordered_map>
 #include <vector>
 #include <exception>
@@ -29,6 +30,8 @@
 #include <string>
 #include <thread>
 
+#include "audio/media_player.h"
+#include "audio/mixer.h"
 #include "core/layout.h"
 #include "core/log.h"
 #include "game.h"
@@ -58,6 +61,13 @@ void apply_window_mode(SDL_Window* win, const settings::Settings& s) {
         SDL_SetWindowSize(win, s.window_w, s.window_h);
         SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     }
+}
+
+void apply_audio_volumes(const settings::Settings& s) {
+    audio::set_master_volume(s.master_volume);
+    audio::set_group_volume(audio::kMusic, s.music_volume);
+    audio::set_group_volume(audio::kSfx, s.sfx_volume);
+    audio::set_group_volume(audio::kVoice, s.voice_volume);
 }
 
 }  // namespace
@@ -127,6 +137,21 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     jni::install(rt);
     if (!opt.no_mods) mods::install(rt, cfg);
     else LOG("mods: disabled (--no-mods)");
+    {  // audio: the Java GLMediaPlayer class on our mixer
+        media::Config mc;
+        mc.data_dir = paths.data;
+        mc.table_file = paths.root / "work" / "sound_table.txt";
+        mc.restore_missing = cfg.restore_missing_sounds;
+        mc.native_name = [&rt](int i) -> std::string {  // the game's own name for sound i (FileManager)
+            const uint32_t p = uint32_t(rt.main_cpu().call(rt.lib_func("_Z23AndroidGetSoundFielNamei"), {uint32_t(i)}));
+            if (!p) return {};
+            const char* s = reinterpret_cast<const char*>(rt.mem().ptr(p));
+            return std::string(s, strnlen(s, 256));
+        };
+        if (!media::init(mc)) LOG("audio: disabled (no output device)");
+        apply_audio_volumes(cfg);
+        if (!opt.audio_dump.empty()) audio::start_capture();
+    }
     {
         std::string missing;
         int n = 0;
@@ -236,9 +261,11 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                     if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST && !paused) {
                         native("Gangster2_nativePause", {env, c_g2});
                         paused = true;
+                        audio::set_global_pause(true);
                     } else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED && paused) {
                         native("Gangster2_nativeResume", {env, c_g2});
                         paused = false;
+                        audio::set_global_pause(ui::is_open());
                     }
                 }
                 if (ev.type == SDL_CONTROLLERDEVICEADDED) {
@@ -270,6 +297,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
             // The settings menu pauses the game: the last frame stays on screen underneath.
             const bool menu_open = ui::is_open();
             if (menu_open != menu_was_open) {
+                audio::set_global_pause(menu_open || paused);
                 if (menu_open) in.release_all();
                 else in.suppress_held();  // the button that closed the menu must not reach the game
                 menu_was_open = menu_open;
@@ -315,6 +343,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                         if (!gles1::vfb_reconfigure(scale, cfg.msaa)) ui::toast("That anti-aliasing level is not supported");
                     }
                     if (cfg.anisotropy != before.anisotropy) gles1::set_anisotropy(cfg.anisotropy);
+                    apply_audio_volumes(cfg);
                     in.apply_settings(cfg);
                     settings::save(settings_file, cfg);
                 }
@@ -421,6 +450,9 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
         LOG("FATAL at frame %d: %s", frame, e.what());
         rc = 1;
     }
+    if (!opt.audio_dump.empty()) audio::write_capture(opt.audio_dump);
+    media::report();
+    audio::shutdown();
     jni::report();
     gles1::report();
     std::string stubs;

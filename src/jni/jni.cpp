@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "core/layout.h"
+#include "audio/media_player.h"
 #include "core/log.h"
 #include "rt/runtime.h"
 
@@ -146,18 +147,42 @@ const std::map<std::tuple<std::string, std::string, std::string>, JavaMethod>& j
         add("GLMediaPlayer", "detectPhoneLang", "()I", [](auto&) { return ret_i(0); });  // English
         add("GLMediaPlayer", "getDeviceWidth", "()I", [](auto&) { return ret_i(g_device_width); });
         add("GLMediaPlayer", "loadMovie", "(Ljava/lang/String;)I", [](auto&) { return ret_i(1); });
-        add("GLMediaPlayer", "isMediaPlaying", "(I)I", [](auto&) { return ret_i(0); });
-        add("GLMediaPlayer", "isSoundLoaded", "(II)I", [](auto&) { return ret_i(0); });
-        add("GLMediaPlayer", "isSoundLoadedBig", "(I)I", [](auto&) { return ret_i(0); });
-        for (auto [n, s] : std::initializer_list<std::pair<const char*, const char*>>{
-                 {"loadSound", "(II)V"}, {"loadSoundBig", "(I)V"}, {"unloadSound", "(II)V"}, {"unloadSoundBig", "(I)V"},
-                 {"playSound", "(IIFF)V"}, {"playSoundBig", "(IFI)V"}, {"pauseSound", "(II)V"}, {"pauseSoundBig", "(I)V"},
-                 {"resumeSound", "(II)V"}, {"resumeSoundBig", "(I)V"}, {"stopSound", "(II)V"}, {"stopSoundBig", "(I)V"},
-                 {"setVolume", "(IIF)V"}, {"setVolumeBig", "(IF)V"}, {"setPitch", "(IIF)V"}, {"resetSound", "(I)V"},
-                 {"stopAllSounds", "()V"}, {"pauseAllSounds", "()V"}, {"resumeAllSounds", "()V"},
-                 {"stopAllPool", "(I)V"}, {"stopAllBig", "(I)V"}, {"destroySoundPool", "()V"},
-                 {"initSoundPoolArray", "()V"}, {"setMusicGain", "(F)V"}, {"setSfxGain", "(F)V"}, {"setVfxGain", "(F)V"}})
-            add("GLMediaPlayer", n, s);
+        // GLMediaPlayer: audio (src/audio/media_player.*, same behaviour as the Java class)
+        add("GLMediaPlayer", "isMediaPlaying", "(I)I", [](auto& a) { return ret_i(media::is_media_playing(int(a[0].i))); });
+        add("GLMediaPlayer", "isSoundLoaded", "(II)I", [](auto& a) { return ret_i(media::is_sound_loaded(int(a[0].i))); });
+        add("GLMediaPlayer", "isSoundLoadedBig", "(I)I", [](auto& a) { return ret_i(media::is_sound_loaded_big(int(a[0].i))); });
+#define V(body) [](const std::vector<JVal>& a) { (void)a; body; return JVal{}; }
+#define AI(k) int(a.at(k).i)
+#define AF(k) float(a.at(k).is_fp ? a.at(k).d : double(a.at(k).i))
+        add("GLMediaPlayer", "loadSound", "(II)V", V(media::load_sound(AI(0))));
+        add("GLMediaPlayer", "unloadSound", "(II)V", V(media::unload_sound(AI(0))));
+        add("GLMediaPlayer", "playSound", "(IIFF)V", V(media::play_sound(AI(0), AF(2), AF(3))));
+        add("GLMediaPlayer", "stopSound", "(II)V", V(media::stop_sound(AI(0))));
+        add("GLMediaPlayer", "pauseSound", "(II)V", V(media::pause_sound(AI(0))));
+        add("GLMediaPlayer", "resumeSound", "(II)V", V(media::resume_sound(AI(0))));
+        add("GLMediaPlayer", "setPitch", "(IIF)V", V(media::set_pitch(AI(0), AF(2))));
+        add("GLMediaPlayer", "setVolume", "(IIF)V");  // a no-op in the Java class too
+        add("GLMediaPlayer", "stopAllPool", "(I)V", V(media::stop_all_pool(AI(0))));
+        add("GLMediaPlayer", "destroySoundPool", "()V", V(media::reset_pool()));
+        add("GLMediaPlayer", "initSoundPoolArray", "()V", V(media::reset_pool()));
+        add("GLMediaPlayer", "loadSoundBig", "(I)V", V(media::load_sound_big(AI(0))));
+        add("GLMediaPlayer", "unloadSoundBig", "(I)V", V(media::unload_sound_big(AI(0))));
+        add("GLMediaPlayer", "playSoundBig", "(IFI)V", V(media::play_sound_big(AI(0), AF(1), AI(2))));
+        add("GLMediaPlayer", "stopSoundBig", "(I)V", V(media::stop_sound_big(AI(0))));
+        add("GLMediaPlayer", "pauseSoundBig", "(I)V", V(media::pause_sound_big(AI(0))));
+        add("GLMediaPlayer", "resumeSoundBig", "(I)V", V(media::resume_sound_big(AI(0))));
+        add("GLMediaPlayer", "setVolumeBig", "(IF)V", V(media::set_volume_big(AI(0), AF(1))));
+        add("GLMediaPlayer", "resetSound", "(I)V", V(media::reset_sound(AI(0))));
+        add("GLMediaPlayer", "stopAllSounds", "()V", V(media::stop_all_big()));
+        add("GLMediaPlayer", "stopAllBig", "(I)V", V(media::stop_all_big()));
+        add("GLMediaPlayer", "pauseAllSounds", "()V", V(media::pause_all_sounds()));
+        add("GLMediaPlayer", "resumeAllSounds", "()V", V(media::resume_all_sounds()));
+        add("GLMediaPlayer", "setMusicGain", "(F)V", V(media::set_music_gain(AF(0))));
+        add("GLMediaPlayer", "setSfxGain", "(F)V", V(media::set_sfx_gain(AF(0))));
+        add("GLMediaPlayer", "setVfxGain", "(F)V", V(media::set_vfx_gain(AF(0))));
+#undef V
+#undef AI
+#undef AF
         // GLResLoader: never used during boot (the game reads files itself); implemented in Phase 3 if needed
         add("GLResLoader", "getResourceFull", "(Ljava/lang/String;)[B");
         add("GLResLoader", "getResourceBytes", "(Ljava/lang/String;II)[B");

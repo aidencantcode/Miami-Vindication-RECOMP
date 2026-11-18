@@ -62,6 +62,11 @@ const std::vector<Field>& fields() {
         F("controls", "mouse_sensitivity", &Settings::mouse_sensitivity),
         F("controls", "invert_camera_y", &Settings::invert_camera_y),
         F("controls", "stick_deadzone", &Settings::stick_deadzone),
+        F("audio", "master_volume", &Settings::master_volume),
+        F("audio", "music_volume", &Settings::music_volume),
+        F("audio", "sfx_volume", &Settings::sfx_volume),
+        F("audio", "voice_volume", &Settings::voice_volume),
+        F("audio", "restore_missing_sounds", &Settings::restore_missing_sounds),
         F("game", "skip_intro", &Settings::skip_intro),
         F("game", "pause_when_unfocused", &Settings::pause_when_unfocused),
     };

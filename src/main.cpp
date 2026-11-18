@@ -99,6 +99,7 @@ int main(int argc, char** argv) {
         if (!std::strcmp(argv[i], "--dump-hud")) opt.dump_hud_at = std::atof(argv[i + 1]);
         if (!std::strcmp(argv[i], "--open-settings")) opt.open_settings_at = std::atof(argv[i + 1]);
         if (!std::strcmp(argv[i], "--set")) opt.set.push_back(argv[i + 1]);
+        if (!std::strcmp(argv[i], "--audio-dump")) opt.audio_dump = argv[i + 1];
         if (!std::strcmp(argv[i], "--touch-controls")) opt.touch_controls = argv[i + 1];
         if (!std::strcmp(argv[i], "--quality")) opt.quality = argv[i + 1];
         if (!std::strcmp(argv[i], "--profile-guest")) opt.profile_guest_at = std::atof(argv[i + 1]);

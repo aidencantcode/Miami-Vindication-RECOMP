@@ -31,6 +31,13 @@ struct Settings {
     bool invert_camera_y = false;
     float stick_deadzone = 0.2f;
 
+    // [audio]
+    float master_volume = 1.0f;             // 0..1
+    float music_volume = 1.0f;              // music + radio (m_*)
+    float sfx_volume = 1.0f;                // effects
+    float voice_volume = 1.0f;              // speech + cutscene audio (vfx_*, cin_*)
+    bool restore_missing_sounds = true;     // 41 sounds the phone never found (name mix-ups): use the game's own name
+
     // [game]
     bool skip_intro = true;                 // skip the content warning / intro movie screens where possible
     bool pause_when_unfocused = true;

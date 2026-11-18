@@ -215,6 +215,18 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
             ImGui::TextDisabled("Applies to textures as they load.");
             ImGui::EndTabItem();
         }
+        if (ImGui::BeginTabItem("Audio")) {
+            ch |= ImGui::SliderFloat("Master volume", &s.master_volume, 0.0f, 1.0f, "%.2f");
+            ch |= ImGui::SliderFloat("Music and radio", &s.music_volume, 0.0f, 1.0f, "%.2f");
+            ch |= ImGui::SliderFloat("Effects", &s.sfx_volume, 0.0f, 1.0f, "%.2f");
+            ch |= ImGui::SliderFloat("Voices and cutscenes", &s.voice_volume, 0.0f, 1.0f, "%.2f");
+            ch |= ImGui::Checkbox("Restore sounds the phone version never played", &s.restore_missing_sounds);
+            restart_note();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("41 sounds exist in the data under the game's own name but the Java table\n"
+                                  "asked for a misspelled one, so the phone stayed silent.");
+            ImGui::EndTabItem();
+        }
         if (ImGui::BeginTabItem("Controls")) {
             ch |= combo_str("Touch controls", &s.touch_controls,
                             {{"auto", "Auto (hide while a controller or keyboard plays)"}, {"show", "Always show"},
