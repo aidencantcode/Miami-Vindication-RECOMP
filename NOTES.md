@@ -19,6 +19,13 @@ at the start of every session.
   python -I tools\data_inventory.py original\gameloft\games\Gangstar2 analysis\data_inventory.md
   jadx --log-level ERROR --show-bad-code -d analysis\jadx original\game.apk
   ```
+- Phase 1 boot probe (Python + Unicorn), each step re-runnable, report in `analysis/probe_<step>.md`:
+  ```
+  python -I tools\probe\test_unicorn_semantics.py   # Unicorn behaviours the probe relies on
+  python -I tools\probe\test_hle.py                 # soft-float / strtol / printf unit tests
+  python -I tools\probe\probe.py 1a|1b|1c           # load+verify | constructors | first JNI calls
+  ```
+  The probe never writes into `original/`: guest writes go to `work/probe_sandbox/`.
 - Git-ignored, local-only: `original/`, `work/`, `analysis/raw/`, `analysis/jadx/`.
   Committed: our tools, these notes, and small derived reports in `analysis/*.md`.
 
@@ -34,16 +41,20 @@ Installed in Phase 0 (portable, official sources, SHA-256/512 verified):
 |---|---|---|
 | Git for Windows (PortableGit) | 2.56.1 | `git\cmd\git.exe` |
 | Python (python.org NuGet build) | 3.13.17 | `python-nupkg\tools\python.exe` |
-| pip packages | pyelftools 0.33, capstone 5.0.9 | (in that Python) |
+| pip packages | pyelftools 0.33, capstone 5.0.9, unicorn 2.1.4, itanium_demangler 1.1 | (in that Python) |
 | Temurin JDK | 21.0.13+9 | `jdk-21.0.13+9\` |
 | jadx | 1.5.6 | `jadx\bin\jadx.bat` |
 
 Downloads kept in `devtools\_downloads\` (can be deleted). Built-ins also
 available: `tar.exe`, WinRAR, .NET Framework (PowerShell).
 
-**Not installed yet (deferred to when needed, ask first):** LLVM/clang, CMake,
-Ninja, Ghidra, SDL2, 7-Zip (not needed; zip handled by .NET), ANGLE, ADB/Frida,
-a C/C++ compiler of any kind (no MSVC either).
+**Install permission (2026-11-18):** the owner said "install whatever u need however
+u need pip python everything". This replaces CLAUDE.md's "ask before installing";
+still ask before deleting files or changing the approach. Keep installs portable under
+`devtools\`, verify checksums, record versions here.
+
+**Not installed yet:** LLVM/clang, CMake, Ninja, Ghidra, SDL2, 7-Zip (not needed; zip
+handled by .NET), ANGLE, ADB/Frida, and no C/C++ compiler of any kind (no MSVC either).
 
 Git: repo-local identity `Aiden <owner's email>` (set with `git config`, not global).
 
@@ -216,6 +227,56 @@ draw distance, creation settings). Study what each hook changes before Phase 3.
 - **Port implication:** the path shim maps those prefixes to host folders
   (`work/data/` for testing, a saves folder for `/data/data/...`), case-insensitively.
 
+## 6a. Runtime facts from the Phase 1 probe (Unicorn, ARM926 model)
+
+Reports: `analysis/probe_1a.md`, `probe_1b.md`, `probe_1c.md`.
+
+**Loading (1a).** Library mapped at `0x10000000` (11,157,504 bytes incl. `.bss`).
+All 47,173 relocations applied with Android 2.x linker semantics, matching
+`DT_RELCOUNT` / `DT_RELSZ` / `DT_PLTRELSZ`. After relocation, all 448 init_array
+entries and **all 32,537 slots of the 1,456 C++ vtables** resolve to a function start
+with the correct ARM/Thumb bit, a typeinfo, an import, 0 or a small offset.
+2 of the 299 imports (`__aeabi_unwind_cpp_pr0/pr1`) are never referenced by any
+relocation, only named by `.ARM.exidx`.
+
+**Static init (1b).** All 448 constructors return (0.1 s emulated). Only 61 call
+imports: 134 `__aeabi_atexit` destructor registrations, 10 guarded local statics,
+23 mutexes, string copies, and the game's allocator taking **12 KB via 4 `sbrk`
+calls**. No threads, no files, no GL. The game calls `sysconf(0x27/0x28)`
+(`_SC_PAGESIZE`), matching bionic's constants. **STLport 5.1.4 is statically linked**
+(`stlport514_src_locale_impl.cpp`), so `std::` lives inside the game.
+
+**First JNI calls (1c).** Sequence `GameRenderer.nativeGetJNIEnv` →
+`GLResLoader.nativeInit(0)` → `GLMediaPlayer.nativeInit(0)` →
+`nativeGetTotalSounds()` → `nativeGetTotalSoundsOfSameInstance()` runs cleanly:
+- `nativeGetJNIEnv` stores the env in the global **`mEnv`** (`lib+0xa6c5f0`).
+- Each class's `nativeInit` does `NewGlobalRef(jclass)` then `GetStaticMethodID` on it:
+  3 lookups for `GLResLoader`, 33 for `GLMediaPlayer`, **all 36 matching the decompiled
+  Java exactly** (names, signatures, overloads). No `FindClass` anywhere so far.
+  No libc imports are called by these JNI init functions.
+- `nativeGetTotalSounds()` = **1736**, `…OfSameInstance()` = 1.
+- `nativeGetSoundFileName(i)` faults on a NULL `FileManager` (`FileManager::_GetDvdName`
+  via `AndroidGetSoundFielName`): the singleton is created by later init. **Java never
+  calls `getSoundFile()` in this build**, so that native is dead code in practice.
+
+**Sound table (Java side).** `GLMediaPlayer.cJ` is a hard-coded `String[]` of **1,737**
+file names. Java allocates `nativeGetTotalSounds()` slots, plus one more on Motorola
+(`GetDeviceType()==1 → cV++`), so cJ = 1736 + 1 Motorola-only slot
+(`sfx_helicopter_stop.ogg`), consistent with the native count. Against the data folder:
+1,670 names exist, **67 don't**. 40 are spelling differences (2 music: `m_m_pub_abraham`
+vs `m_pub_abraham`, `m_pub_fix_o_matic` vs `m_pub_fix-o-matic`; 6 `sfx_aligator_*` vs
+`sfx_alligator_*`; 32 `vfx_blackX` vs `vfx_black_X`) and 27 are absent (15
+`cin_CH5_M_05_*`, `cin_CH2_M_03_MIDDLE_00`, `cin_CH3_M_06_MIDDLE_02`,
+`vfx_{female,male}_hey`, `vfx_{female,male}_hit_1..3`, `sfx_motocross_down`,
+`m_radio_hiphop_jerkit`). 52 `.ogg` files in the data aren't referenced. On the phone
+those sounds would have failed to load silently (SoundPool returns an error, no crash).
+The APK is 1.0.6 while `data.txt` points at the 1.0.5 data package, which may explain it.
+
+**Unicorn behaviours relied on** (`test_unicorn_semantics.py`, 2.1.4): in an SVC hook,
+PC = svc+4; writing PC (with the Thumb bit) from a hook redirects execution; nested
+`emu_start` from inside a hook works (used to call the game's own `malloc` from HLE
+`strdup`, and comparators from `qsort`).
+
 ## 7. Data folder (`original/gameloft/games/Gangstar2/`)
 
 Flat folder (no subdirectories), 2,405 files, 375 MB. Full table:
@@ -281,16 +342,18 @@ None of this applies to a PC port: we replace the whole Android/Java layer ourse
 
 | # | question | how to find out |
 |---|---|---|
-| Q1 | Which `JNIEnv` functions does the native code use? | Phase 1 probe: fake JNIEnv with a logging trap in every slot |
-| Q2 | Is each callback really looked up on the `jclass` from its class's `nativeInit`? | Phase 1 probe: log `GetStaticMethodID(clazz, name, sig)` |
-| Q3 | Which overloads (`loadSound (II)V` vs Context version; `getResourceFull` String vs int) does native request? | same as Q2 |
-| Q4 | What do the 448 init_array constructors call (any threads, files, GL before a context exists)? | Phase 1 probe, step 1b |
-| Q5 | How big must the `sbrk` heap be, and does any libc-allocated memory reach the game's `free`? | Phase 1/2 probe: log `sbrk` growth; trace `strdup`/`free` pairs |
+| Q1 | Which `JNIEnv` functions does the native code use? | **Partly answered (1c):** so far only `NewGlobalRef` + `GetStaticMethodID`. The rest appear once `Gangster2.nativeInit`/`nativeRender` run (Phase 2a) |
+| Q2 | Is each callback really looked up on the `jclass` from its class's `nativeInit`? | **Answered (1c): yes**, after `NewGlobalRef(jclass)`. No `FindClass` |
+| Q3 | Which overloads does native request? | **Answered (1c):** `loadSound (II)V`, `loadSoundBig (I)V`, `getResourceFull (Ljava/lang/String;)[B` |
+| Q4 | What do the 448 init_array constructors call? | **Answered (1b):** atexit/guards/mutexes/string copies/12 KB sbrk; no threads, files or GL |
+| Q5 | How big must the `sbrk` heap be, and does any libc-allocated memory reach the game's `free`? | 12 KB after static init. Probe HLE `strdup` already allocates with the game's own `malloc`; watch the full boot in Phase 2a |
 | Q6 | What does each StormGLOFT hook change (e.g. `nativeResize`, `UseMipMaps`, `GetLowResFarPlane`)? | Ghidra on libStormGLOFT `JNI_OnLoad` + hook bodies (Ghidra not installed yet) |
 | Q7 | What do the demo/trial (`DisableLaunchGame`, `unlockDemo`) and VZ billing callbacks need to return for the normal game flow? | Ghidra on the native callers; probe in Phase 2 |
 | Q8 | The 227 `mov pc, reg` jump tables: one GCC pattern or several? | Script over the disassembly (Phase 4 prep) |
 | Q9 | Did this APK + data last run on the owner's device in Sept 2025 (InsTime)? If such a device still exists, it could be used to trace real JNI/GL calls (Frida/jnitrace). | Ask the owner |
-| Q10 | Exact bionic layouts needed for `__sF` (FILE), `_ctype_` tables, `jmp_buf` for this API level | bionic source of the Android 2.x era (AOSP `libc/include/stdio.h`, `ctype_.c`, `arch-arm/bionic/setjmp.S`) |
+| Q10 | Exact bionic layouts needed for `__sF` (FILE), `_ctype_` tables, `jmp_buf`, `struct stat`, `dirent` | Implemented in the probe from the Android 2.x headers (`tools/probe/bionic.py`, `hle_libc.py` docstring). `sysconf` constants confirmed by the game's own calls. **`_ctype_` pointer-vs-table still unverified**: the probe watches it, but nothing has read it yet (Phase 2a will). Cross-check against AOSP bionic source when convenient |
+| Q11 | Restore the 40 renamed sounds with an alias table, or keep the original's silent failures? | Owner's call in Phase 3 (audio). List in §6a |
+| Q12 | Where is the `FileManager` singleton created, and what else must `Gangster2.nativeInit` find (files, GL) before `nativeRender` works? | Phase 2a headless boot in the probe |
 
 ## 10. Glossary (RE terms as they come up)
 
@@ -327,3 +390,17 @@ None of this applies to a PC port: we replace the whole Android/Java layer ourse
   GLES 1.1 only, no EGL/OpenSL; the APK is a 2018 repack with a hooking compatibility patch;
   data is the Tegra DXT build.**
 - Recommendation and Phase 1 proposal: `PLAN.md`. Waiting for the owner's OK.
+
+### 2026-11-18: Phase 1 (boot probe) complete
+- Owner OK'd Phase 1 and gave blanket install permission. Installed `unicorn` 2.1.4
+  and `itanium_demangler` 1.1 (pip).
+- Wrote `tools/probe/` (ELF loader, bionic data objects, Unicorn harness with svc traps,
+  HLE libc, fake JNI) plus two test files (Unicorn semantics, 30 HLE unit tests).
+- 1a ✅ load + relocate, cross-checked against the dynamic section and every vtable.
+- 1b ✅ all 448 constructors run; no stubs hit.
+- 1c ✅ onSurfaceCreated JNI sequence runs; 36 method lookups all match Java;
+  `nativeGetTotalSounds()` = 1736, consistent with Java's 1,737-entry table.
+  Changed the planned 1c criterion: `nativeGetSoundFileName` needs later init and is
+  never called by Java, so the check became "native count vs Java's hard-coded table".
+- Findings: §6a. New open questions Q11, Q12.
+- Next: Phase 2 proposal in `PLAN.md`. Waiting for the owner's OK.

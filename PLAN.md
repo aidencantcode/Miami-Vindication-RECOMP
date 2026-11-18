@@ -48,7 +48,20 @@ Unicorn is clumsy, and it doesn't serve the arm64 target. So we keep the emulato
 Target order stays as in CLAUDE.md (Windows first). Nothing found suggests switching.
 
 ---------------------------------------------------------------------------
-## 🟡 Phase 1: Boot probe (proposed; waiting for owner OK)
+## ✅ Phase 1: Boot probe (done 2026-11-18)
+
+- [x] 1a loader: all relocations applied and cross-checked (`analysis/probe_1a.md`)
+- [x] 1b 448/448 static constructors run, no stubs hit (`analysis/probe_1b.md`)
+- [x] 1c onSurfaceCreated JNI sequence runs; 36/36 method lookups match Java;
+      native sound count agrees with Java's table (`analysis/probe_1c.md`)
+- Deviation from the original plan: 1c's "every `nativeGetSoundFileName` result exists"
+  check was replaced, because that native needs the `FileManager` from later init and Java
+  never calls it. The replacement compares the native count against Java's hard-coded
+  1,737-name table (= 1736 + one Motorola-only slot). Findings: NOTES §6a.
+
+The original Phase 1 proposal is kept below for reference.
+
+### (as proposed) Phase 1: Boot probe
 
 **Goal:** prove we can load `libGangster2.so`, relocate it, run its static
 constructors, and call real JNI entry points with correct results, all *before*
@@ -98,18 +111,45 @@ into the portable Python). Nothing else.
 If so, 1c reports exactly which import/JNI call it stopped at, and we adjust.
 
 ---------------------------------------------------------------------------
-## ⬜ Later phases (tentative; refine after Phase 1)
+## 🟡 Phase 2: from "init runs" to "first frame on screen" (proposed; waiting for owner OK)
 
-**Phase 2: C++ runtime skeleton on Windows (still emulated CPU).**
-Owner decision first: toolchain (LLVM-MinGW, portable and self-contained, vs Visual
-Studio Build Tools + clang-cl, for the VS debugger), plus CMake, Ninja, SDL2, and
-Ghidra for targeted RE. Port the loader to C++ (Unicorn C API); SDL2 window + OpenGL
-**compatibility** context (RTX 3060: GL 4.6 compat, fixed-function and S3TC
-available); GLES 1.1 → desktop GL mapping (`glClearDepthf`→`glClearDepth`, OES FBO →
-core FBO, `glMapBufferOES` → `glMapBuffer`, …); fake JNI in C (FalsoJNI-style);
-`/sdcard/...` and `/data/data/...` path mapping; bionic libc shims.
-✔ when `nativeInit` + `nativeResize` + the first `nativeRender` frames run and
-something game-drawn (loading screen) appears.
+Split in two so the C++ work starts from a fully mapped surface instead of guesses.
+
+### 2a. Headless full boot in the probe (Python, no new installs)
+**Goal:** run the rest of the real startup and the first frames entirely in the probe,
+with a *recording fake GL*: `Gangster2.nativeInit(isDemo=0)` → `GameRenderer.nativeInit(1)`
+→ `nativeResize(800, 480)` (the P990's screen) → `nativeRender()` × N.
+- Fake GL: `glGen*` hand out ids, `glGetString` returns a plausible GLES 1.1 / Tegra-style
+  vendor/renderer/extensions string, `glGetIntegerv` answers limits, FBO status = complete;
+  everything else is recorded (call name + args) and returns 0. Texture uploads are recorded
+  with format/size, not decoded.
+- Real file reads via the existing read-only overlay; any write lands in `work/probe_sandbox/`.
+- Java callbacks answered from the decompiled behaviour (`isDemo` = 0 path, `GetDeviceType` -1, …).
+- ✔ Pass if: both inits return; N ≥ 60 `nativeRender` calls return without faults; the report
+  lists every file opened, every JNI function and Java callback used (closes Q1), every GL
+  function used with counts, the texture formats uploaded, and whether the `FileManager` exists
+  afterwards (Q12; then `nativeGetSoundFileName` should work too). Also confirms the `_ctype_`
+  layout (Q10) if any parsing code runs.
+- Expected trouble spots: threads (`pthread_create`: the probe will have to run thread entry
+  points cooperatively or on demand), `pthread_cond_wait` loops, timing (`gettimeofday`), and
+  the demo/billing callbacks.
+
+### 2b. C++ runtime skeleton on Windows (emulated CPU, real window)
+**Toolchain (my recommendation; install is pre-approved):** the current **Visual Studio
+Community with the C++ workload** (MSVC + its bundled CMake/Ninja + clang-cl), because its
+debugger is what a Unity/C# developer already knows and the crash-fix loop lives in the
+debugger. Alternative if the owner prefers small and portable: **LLVM-MinGW** (~150 MB,
+debug with lldb/gdb). Plus SDL2, the Unicorn C library, and Ghidra (JDK 21 is already there)
+for targeted RE.
+- Port the probe's loader, HLE libc and fake JNI to C++ in `src/` (same structure, the probe
+  stays as the reference/oracle).
+- SDL2 window + OpenGL **compatibility** context (RTX 3060: GL 4.6 compat, fixed-function and
+  S3TC available); GLES 1.1 → desktop GL mapping (`glClearDepthf`→`glClearDepth`, OES FBO →
+  core FBO, `glMapBufferOES` → `glMapBuffer`, …), driven by 2a's list of GL functions actually used.
+- ✔ when the same boot sequence as 2a runs in the C++ build and the first game-drawn frame
+  (loading screen) appears in the window.
+
+## ⬜ Later phases (tentative; refine after Phase 2)
 
 **Phase 3: Playable under emulation.** Input (mouse/keyboard/gamepad → touch +
 keycodes), audio (`GLMediaPlayer` callbacks → Vorbis via SDL/miniaudio), intro video
