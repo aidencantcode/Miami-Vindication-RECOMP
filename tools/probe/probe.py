@@ -601,6 +601,10 @@ def step_2a(args):
     if fg.draws:
         last = max(fg.draws)
         rep.md(f"- draw calls per frame: " + ", ".join(f"f{i}={fg.draws[i]}" for i in sorted(fg.draws)[-10:]))
+    rep.md("- vertex arrays (array, components, type): "
+           + ", ".join(f"{k[0]}/{k[1]}/{k[2]}×{v}" for k, v in fg.array_types.most_common()))
+    rep.md("- draw calls (call, mode, index type): "
+           + ", ".join(f"{k[0]}/{k[1]}/{k[2]}×{v}" for k, v in fg.draw_kinds.most_common()))
     rep.md(f"- extension checks (strstr on GL_EXTENSIONS): "
            + (", ".join(f"`{k}`" for k in ext_needles) if ext_needles else "none"))
     if fg.unknown_queries:

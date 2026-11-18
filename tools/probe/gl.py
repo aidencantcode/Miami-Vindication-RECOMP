@@ -70,6 +70,8 @@ class FakeGL:
         self.draws = collections.Counter()
         self.clears = collections.Counter()
         self.unknown_queries = collections.Counter()
+        self.array_types = collections.Counter()   # (array, size, type) -> calls
+        self.draw_kinds = collections.Counter()    # (call, mode, index type) -> calls
         for imp in emu.lib.imports:
             if imp.name.startswith("gl"):
                 emu.handlers[imp.name] = getattr(self, "h_" + imp.name, self.record)
@@ -225,12 +227,35 @@ class FakeGL:
         return 0
 
     # -- per-frame statistics ------------------------------------------------------------
+    TYPES = {0x1400: "BYTE", 0x1401: "UNSIGNED_BYTE", 0x1402: "SHORT", 0x1403: "UNSIGNED_SHORT",
+             0x1405: "UNSIGNED_INT", 0x1406: "FLOAT", 0x140C: "FIXED"}
+    MODES = {0: "POINTS", 1: "LINES", 2: "LINE_LOOP", 3: "LINE_STRIP", 4: "TRIANGLES",
+             5: "TRIANGLE_STRIP", 6: "TRIANGLE_FAN"}
+
+    def _pointer(self, emu, name, a):
+        self.calls[name] += 1
+        if name == "glNormalPointer":
+            typ = a.u32()
+            size = 3
+        else:
+            size, typ = a.u32(), a.u32()
+        self.array_types[(name[2:-7], size, self.TYPES.get(typ, hex(typ)))] += 1
+        return 0
+
+    h_glVertexPointer = h_glTexCoordPointer = h_glColorPointer = h_glNormalPointer = _pointer
+
     def h_glDrawArrays(self, emu, name, a):
         self.calls[name] += 1
         self.draws[self.frame] += 1
+        self.draw_kinds[("DrawArrays", self.MODES.get(a.u32(), "?"), "-")] += 1
         return 0
 
-    h_glDrawElements = h_glDrawArrays
+    def h_glDrawElements(self, emu, name, a):
+        self.calls[name] += 1
+        self.draws[self.frame] += 1
+        mode, count, typ = a.u32(), a.u32(), a.u32()
+        self.draw_kinds[("DrawElements", self.MODES.get(mode, "?"), self.TYPES.get(typ, hex(typ)))] += 1
+        return 0
 
     def h_glClear(self, emu, name, a):
         self.calls[name] += 1

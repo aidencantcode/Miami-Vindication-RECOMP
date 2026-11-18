@@ -19,6 +19,8 @@ analysis/raw/
 
 # --- Build / tooling output --------------------------------------------------
 build/
+third_party/
+vcpkg_installed/
 out/
 __pycache__/
 *.pyc
