@@ -10,6 +10,8 @@
 #include <initializer_list>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 struct uc_struct;
 
@@ -70,6 +72,16 @@ public:
     uint64_t call(uint32_t addr, std::initializer_list<uint32_t> args = {},
                   std::initializer_list<uint32_t> stack_args = {});
 
+    // Function hooks: call Runtime::run_function_hook when execution reaches `addr`.
+    void install_code_hook(uint32_t addr);
+    // Return-address stack used by post-hooks (see Runtime::hook_function).
+    void push_post(uint32_t lr, int hook) { post_stack_.push_back({lr, hook}); }
+    bool pop_post(uint32_t* lr, int* hook) {
+        if (post_stack_.empty()) return false;
+        *lr = post_stack_.back().first; *hook = post_stack_.back().second; post_stack_.pop_back();
+        return true;
+    }
+
     // Profiling: count executed instructions per basic-block start address (slow; diagnostics only).
     void enable_block_profile(std::unordered_map<uint32_t, uint64_t>* counts);
 
@@ -81,6 +93,8 @@ private:
     static void on_intr(uc_struct* uc, uint32_t intno, void* self);
     static bool on_bad_mem(uc_struct* uc, int type, uint64_t addr, int size, int64_t value, void* self);
     static void on_block(uc_struct* uc, uint64_t addr, uint32_t size, void* self);
+    static void on_code(uc_struct* uc, uint64_t addr, uint32_t size, void* self);
+    std::vector<std::pair<uint32_t, int>> post_stack_;
     std::unordered_map<uint32_t, uint64_t>* block_counts_ = nullptr;
     void fail(const char* what);
 

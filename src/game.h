@@ -15,6 +15,10 @@ struct RunOptions {
     bool no_vsync = false;           // override settings vsync
     double seconds = 0;              // stop after this many seconds (0 = no limit)
     double profile_guest_at = -1;    // start the guest instruction profiler at this time (s)
+    double dump_hud_at = -1;         // log the HUD controls once at this time (s)
+    std::string touch_controls;      // override settings: show | hide | auto
+    std::string quality;             // override settings: phone | low | high | ultra
+    bool no_mods = false;            // run without game/mods hooks (vanilla behaviour, for A/B tests)
 };
 
 int run_game(const rt::Paths& paths, const RunOptions& opt);

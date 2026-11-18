@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <unordered_map>
 #include <vector>
@@ -31,6 +32,7 @@
 #include "core/layout.h"
 #include "core/log.h"
 #include "game.h"
+#include "game/mods.h"
 #include "gl/gles1.h"
 #include "hle/hle.h"
 #include "input/input.h"
@@ -71,6 +73,8 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     }
     if (opt.fps >= 0) cfg.fps_limit = opt.fps;  // command-line overrides (not saved)
     if (opt.no_vsync) cfg.vsync = false;
+    if (!opt.touch_controls.empty()) cfg.touch_controls = opt.touch_controls;
+    if (!opt.quality.empty()) cfg.quality = opt.quality;
 
     // ---- window + GL ------------------------------------------------------------------------------
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) FATAL("SDL_Init: %s", SDL_GetError());
@@ -116,6 +120,8 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     hle::register_libc_stdio(rt);
     gles1::register_handlers(rt);
     jni::install(rt);
+    if (!opt.no_mods) mods::install(rt, cfg);
+    else LOG("mods: disabled (--no-mods)");
     {
         std::string missing;
         int n = 0;
@@ -182,7 +188,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
         }
 
         input::Input in;
-        in.init({&rt, env, jni::find_class(std::string(jni::kPkg) + "GameGLSurfaceView"), c_g2}, kW, kH);
+        in.init({&rt, env, jni::find_class(std::string(jni::kPkg) + "GameGLSurfaceView"), c_g2}, kW, kH, cfg);
         if (!opt.input.empty()) {
             std::string ierr;
             if (!in.parse_script(opt.input, &ierr)) FATAL("%s", ierr.c_str());
@@ -191,12 +197,16 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
         bool running = true, paused = false;
         const auto loop_start = Clock::now();
         bool profiling = false;
-        auto last_report = Clock::now(), frame_start = Clock::now();
+        double dump_hud_at = opt.dump_hud_at;
+        auto last_report = Clock::now(), frame_start = Clock::now(), prev_frame_start = Clock::now();
         int frames_since = 0;
+        double fps_shown = 0;
         std::unordered_map<uint32_t, uint64_t> block_counts;
         double game_ms = 0;  // time inside nativeRender (emulated game code + GL calls) since last report
         for (; running && (opt.frames <= 0 || frame < opt.frames); ++frame) {
+            prev_frame_start = frame_start;
             frame_start = Clock::now();
+            const double frame_dt = std::min(0.1, std::chrono::duration<double>(frame_start - prev_frame_start).count());
             SDL_Event ev;
             while (SDL_PollEvent(&ev)) {
                 if (ev.type == SDL_QUIT) { running = false; continue; }
@@ -228,7 +238,15 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 profiling = true;
             }
             in.run_script(frame, since_start);
+            if (dump_hud_at >= 0 && since_start >= dump_hud_at) {
+                mods::log_controls(rt, kW, kH);
+                dump_hud_at = -1;
+            }
             if (frame == 0) native("Gangster2_nativeResume", {env, c_g2});
+            // Keyboard / controller -> virtual touches on the current HUD.
+            in.update(frame_dt);
+            if (cfg.touch_controls == "auto")  // hide the touch HUD while a pad or the keyboard drives
+                mods::set_touch_controls_hidden(in.last_device() != input::Device::Touch);
             const auto t_game = Clock::now();
             cpu.call(rt.lib_func("Java_com_gameloft_android_GAND_GloftGMHP_ML_GameRenderer_nativeRender"), {env, c_gr});
             game_ms += std::chrono::duration<double, std::milli>(Clock::now() - t_game).count();
@@ -238,6 +256,16 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
             int rx, ry, rw, rh;
             gles1::vfb_present(dw, dh, fit_of(cfg.fit), cfg.smooth_scaling, &rx, &ry, &rw, &rh);
             in.set_viewport(rx, ry, rw, rh);
+            if (in.cursor_visible()) {  // controller menu cursor
+                const int cx = rx + int(in.cursor_x() * rw / kW), cy = ry + int(in.cursor_y() * rh / kH);
+                const int s = std::max(3, rh / 160);  // arm thickness
+                const int l = s * 5;                  // arm length
+                const gles1::OverlayRect cross[] = {
+                    {cx - l - 1, cy - s / 2 - 1, 2 * l + 2, s + 2, 0, 0, 0}, {cx - s / 2 - 1, cy - l - 1, s + 2, 2 * l + 2, 0, 0, 0},
+                    {cx - l, cy - s / 2, 2 * l, s, 1, 0.85f, 0.2f},          {cx - s / 2, cy - l, s, 2 * l, 1, 0.85f, 0.2f},
+                };
+                gles1::draw_overlay_rects(dw, dh, cross, 4);
+            }
             bool shot_time = false;
             for (double& t : shots_at_t)
                 if (t >= 0 && since_start >= t) { shot_time = true; t = -1; }
@@ -251,11 +279,25 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
             gles1::vfb_restore_binding();
 
             if (cfg.fps_limit > 0) {
-                auto target = frame_start + std::chrono::microseconds(1000000 / cfg.fps_limit);
-                std::this_thread::sleep_until(target);
+                // Sleep most of the way, then spin: Windows sleeps are only ~1 ms accurate even with
+                // a 1 ms timer period, which is too coarse for 144-240 fps frame pacing.
+                const auto target = frame_start + std::chrono::nanoseconds(1000000000LL / cfg.fps_limit);
+                const auto coarse = target - std::chrono::microseconds(1500);
+                if (Clock::now() < coarse) std::this_thread::sleep_until(coarse);
+                while (Clock::now() < target) std::this_thread::yield();
             }
             ++frames_since;
             double dt = std::chrono::duration<double>(Clock::now() - last_report).count();
+            if (cfg.show_fps && dt >= 0.5) {
+                const double fps_now = frames_since / dt;
+                if (std::abs(fps_now - fps_shown) >= 0.5) {
+                    fps_shown = fps_now;
+                    char title[128];
+                    std::snprintf(title, sizeof title, "Gangstar: Miami Vindication - %.0f fps (game %.1f ms)", fps_now,
+                                  frames_since ? game_ms / frames_since : 0.0);
+                    SDL_SetWindowTitle(win, title);
+                }
+            }
             if (dt >= 2.0) {
                 LOG("frame %d: %.1f fps, game %.1f ms/frame, %llu draw calls total, heap %u KB", frame,
                     frames_since / dt, frames_since ? game_ms / frames_since : 0.0,
@@ -278,6 +320,16 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                     for (size_t i = 0; i < d.size() && i < 10; ++i)
                         top += rt.imports().trap_name(d[i].second) + "=" + std::to_string(uint64_t(d[i].first / dt)) + " ";
                     LOG("  traps/s: %llu total; %s", (unsigned long long)(total / dt), top.c_str());
+                    static std::vector<uint64_t> prev_hooks;
+                    const auto hc = rt.hook_counts();
+                    std::string hooks;
+                    for (size_t i = 0; i < hc.size(); ++i) {
+                        const uint64_t delta = hc[i].second - (i < prev_hooks.size() ? prev_hooks[i] : 0);
+                        if (delta) hooks += hc[i].first + "=" + std::to_string(uint64_t(delta / dt)) + " ";
+                    }
+                    prev_hooks.resize(hc.size());
+                    for (size_t i = 0; i < hc.size(); ++i) prev_hooks[i] = hc[i].second;
+                    if (!hooks.empty()) LOG("  hooks/s: %s", hooks.c_str());
                 }
                 last_report = Clock::now();
                 frames_since = 0;

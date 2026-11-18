@@ -62,6 +62,52 @@ bool Runtime::init(const Paths& paths, std::string* err, bool fastpath) {
     return true;
 }
 
+void Runtime::post_hook_trap(cpu::Cpu& c, cpu::Args&) {
+    uint32_t lr;
+    int idx;
+    if (!c.pop_post(&lr, &idx)) FATAL("post-hook trap reached with an empty return stack");
+    if (c.rt().fn_hooks_[idx].post) c.rt().fn_hooks_[idx].post(c);
+    c.redirect(lr);  // back to the original caller
+}
+
+void Runtime::hook_function(const std::string& symbol, FunctionHook h) {
+    const uint32_t addr = lib_func(symbol) & ~1u;
+    if (!post_trap_) post_trap_ = add_trap("<post-hook>", &Runtime::post_hook_trap);
+    if (fn_hook_at_.count(addr)) FATAL("function %s hooked twice", symbol.c_str());
+    fn_hooks_.push_back(std::move(h));
+    fn_hook_names_.push_back(symbol);
+    fn_hook_calls_.push_back(0);
+    fn_hook_at_[addr] = int(fn_hooks_.size()) - 1;
+    main_->install_code_hook(addr);  // (future guest threads install all hooks when created)
+}
+
+void Runtime::run_function_hook(cpu::Cpu& c, uint32_t addr) {
+    auto it = fn_hook_at_.find(addr);
+    if (it == fn_hook_at_.end()) return;
+    ++fn_hook_calls_[it->second];
+    const FunctionHook& h = fn_hooks_[it->second];
+    if (h.pre && h.pre(c)) {
+        c.set_reg(cpu::PC, c.reg(cpu::LR));  // skip: return straight to the caller
+        return;
+    }
+    if (h.post) {
+        c.push_post(c.reg(cpu::LR), it->second);
+        c.set_reg(cpu::LR, post_trap_);
+    }
+}
+
+std::vector<std::pair<std::string, uint64_t>> Runtime::hook_counts() const {
+    std::vector<std::pair<std::string, uint64_t>> out;
+    for (size_t i = 0; i < fn_hooks_.size(); ++i) out.push_back({fn_hook_names_[i], fn_hook_calls_[i]});
+    return out;
+}
+
+uint32_t Runtime::lib_object(const std::string& name) const {
+    const loader::Sym* s = elf_.object(name);
+    if (!s) FATAL("game object %s not found", name.c_str());
+    return layout::kLibBase + s->value;
+}
+
 uint32_t Runtime::lib_func(const std::string& name) const {
     uint32_t v = elf_.func(name);
     if (!v) FATAL("game function %s not found", name.c_str());

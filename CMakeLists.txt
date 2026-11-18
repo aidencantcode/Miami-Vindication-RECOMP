@@ -35,6 +35,7 @@ add_executable(gangstar
     src/gl/gles1.cpp
     src/input/input.cpp
     src/settings/settings.cpp
+    src/game/mods.cpp
     src/game.cpp
     src/selftest.cpp
 )

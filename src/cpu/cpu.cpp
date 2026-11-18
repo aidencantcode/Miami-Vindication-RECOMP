@@ -173,6 +173,22 @@ bool Cpu::on_bad_mem(uc_struct*, int type, uint64_t addr, int size, int64_t, voi
     return false;
 }
 
+void Cpu::on_code(uc_struct* uc, uint64_t addr, uint32_t, void* self_) {
+    Cpu& self = *static_cast<Cpu*>(self_);
+    try {
+        self.rt_.run_function_hook(self, uint32_t(addr));
+    } catch (...) {
+        t_pending = std::current_exception();
+        uc_emu_stop(uc);
+    }
+}
+
+void Cpu::install_code_hook(uint32_t addr) {
+    uc_hook h;
+    check_uc(uc_hook_add(uc_, &h, UC_HOOK_CODE, reinterpret_cast<void*>(&Cpu::on_code), this, addr, addr),
+             "hook code");
+}
+
 void Cpu::on_block(uc_struct*, uint64_t addr, uint32_t size, void* self_) {
     // Thumb-1 instructions are 2 bytes, ARM 4; size/2 is close enough for a profile.
     (*static_cast<Cpu*>(self_)->block_counts_)[uint32_t(addr)] += size / 2;

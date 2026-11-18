@@ -20,9 +20,9 @@ struct Settings {
     bool show_fps = false;
 
     // [graphics]
-    std::string quality = "high";           // game performance profile: high | medium | low | phone (original)
+    std::string quality = "high";           // phone (exactly as on the device) | low | high | ultra (more NPCs)
     bool mipmaps = true;                    // the phone profile turned them off
-    float draw_distance = 1.5f;             // multiplier on the game's far plane / LOD distances
+    float draw_distance = 1.5f;             // multiplier on the profile's far plane + texture streaming radius
     int anisotropy = 8;                     // 0/1 = off, 2..16
 
     // [controls]

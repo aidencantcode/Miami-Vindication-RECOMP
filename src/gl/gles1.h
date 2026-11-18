@@ -35,4 +35,9 @@ void vfb_present(int win_w, int win_h, Fit fit, bool linear, int* rx, int* ry, i
 // Re-bind whatever framebuffer the game had bound (after present/overlay drawing).
 void vfb_restore_binding();
 
+// Solid rectangles drawn into the window after vfb_present (window pixels, y from the top).
+// Drawn with scissored clears, so no game GL state (textures, blending, matrices) is touched.
+struct OverlayRect { int x, y, w, h; float r, g, b; };
+void draw_overlay_rects(int win_w, int win_h, const OverlayRect* rects, int n);
+
 }  // namespace gles1

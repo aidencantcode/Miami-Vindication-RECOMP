@@ -487,6 +487,29 @@ void vfb_present(int win_w, int win_h, Fit fit, bool linear, int* rx, int* ry, i
 
 void vfb_restore_binding() { bind_game_fb(); }
 
+void draw_overlay_rects(int win_w, int win_h, const OverlayRect* rects, int n) {
+    GLint sb[4];
+    GLfloat cc[4];
+    GLboolean cm[4], scissor = glIsEnabled(GL_SCISSOR_TEST);
+    glGetIntegerv(GL_SCISSOR_BOX, sb);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, cc);
+    glGetBooleanv(GL_COLOR_WRITEMASK, cm);
+    p_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glEnable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    for (int i = 0; i < n; ++i) {
+        const OverlayRect& r = rects[i];
+        if (r.w <= 0 || r.h <= 0 || r.x >= win_w || r.y >= win_h) continue;
+        glScissor(r.x, win_h - r.y - r.h, r.w, r.h);
+        glClearColor(r.r, r.g, r.b, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
+    glScissor(sb[0], sb[1], sb[2], sb[3]);
+    if (!scissor) glDisable(GL_SCISSOR_TEST);
+    glClearColor(cc[0], cc[1], cc[2], cc[3]);
+    glColorMask(cm[0], cm[1], cm[2], cm[3]);
+}
+
 bool screenshot(const char* path, int w, int h) {
     GLint read_fb = 0, pack = 4;
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fb);
