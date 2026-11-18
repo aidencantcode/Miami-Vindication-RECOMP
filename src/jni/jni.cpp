@@ -77,6 +77,7 @@ struct JObj {
 rt::Runtime* g_rt = nullptr;
 uint32_t g_env = 0, g_vm = 0;
 int g_device_width = 800;
+const char* g_activity_bounce = nullptr;  // a Java call "left the app" (message); game.cpp bounces
 uint32_t g_next_handle = layout::kHandleBase + 0x100;
 std::unordered_map<uint32_t, JObj> g_objs;
 std::unordered_map<std::string, uint32_t> g_classes;
@@ -131,11 +132,15 @@ const std::map<std::tuple<std::string, std::string, std::string>, JavaMethod>& j
         // Gangster2: lifecycle / store / trial state (values = decompiled Java on a fresh install)
         for (auto [n, s] : std::initializer_list<std::pair<const char*, const char*>>{
                  {"Exit", "()V"}, {"sendAppToBackground", "()V"}, {"openBrowser", "(Ljava/lang/String;)V"},
-                 {"launchIGP", "(I)V"}, {"OpenGLive", "(I)V"}, {"NotifyTrophy", "(I)V"}, {"lockDemo", "()V"},
+                 {"NotifyTrophy", "(I)V"}, {"lockDemo", "()V"},
                  {"IncreaseLaunchTimes", "()V"}, {"VZInitMobileNetwork", "()V"}, {"VZRestoreNetworkState", "()V"},
                  {"VZRequestLogin", "()V"}, {"VZRequestPurchaseGame", "()V"}, {"VZGetGamePrice", "()[B"},
                  {"VZGetGameName", "()[B"}, {"VZGetLastServerMsg", "()[B"}})
             add("Gangster2", n, s);
+        // Gameloft LIVE! (online service, long gone): Java started another activity, so the game went to
+        // the background and came back. The port does that bounce at once (see take_activity_bounce).
+        add("Gangster2", "OpenGLive", "(I)V", [](auto&) { g_activity_bounce = "Gameloft LIVE! is not available"; return JVal{}; });
+        add("Gangster2", "launchIGP", "(I)V", [](auto&) { g_activity_bounce = "More Games is not available"; return JVal{}; });
         add("Gangster2", "isWifiAlive", "()I", [](auto&) { return ret_i(0); });
         add("Gangster2", "unlockDemo", "()I", [](auto&) { return ret_i(0); });
         add("Gangster2", "DisableLaunchGame", "()I", [](auto&) { return ret_i(0); });
@@ -373,6 +378,12 @@ void install(rt::Runtime& rt) {
 uint32_t env() { return g_env; }
 
 void set_device_width(int w) { g_device_width = w; }
+
+const char* take_activity_bounce() {
+    const char* b = g_activity_bounce;
+    g_activity_bounce = nullptr;
+    return b;
+}
 
 uint32_t find_class(const std::string& name) {
     auto it = g_classes.find(name);

@@ -181,14 +181,13 @@ Each step is small, committed separately, and verified with screenshots + the ru
   can't reach 120 (CPU-bound, ~20-40 fps). That comes with Phase 4, which only has to be faster.
 - ✅ **Settings overlay** (Dear ImGui; F1, controller Guide or L3+R3): display, graphics, controls, game;
   live-applies what it can, marks restart-only options, saves `settings.ini`. FPS counter, toasts.
-- ⬜ **3b Threads.** Run `vox::funcUpdate` on a host thread with its own Unicorn instance; real
-  mutexes/condition variables/TLS in the pthread HLE (Q13). ✔ when the vox thread runs alongside the
-  render thread for minutes without deadlocks or faults.
-- ⬜ **3c Audio.** Implement the `GLMediaPlayer` callbacks (SoundPool-style effects + MediaPlayer-style
-  streams) with SDL audio + an Ogg Vorbis decoder (stb_vorbis); sound-name resolution rule per Q11
-  (owner's choice). ✔ when menu music and click sounds play.
-- ⬜ **3e Saves.** `Gangstar2.sav` / `.preferences` persist in `work/sandbox/data/` (later a proper user
-  folder); verify a save survives a restart.
+- ➖ **3b Threads.** Not needed: sound doesn't go through vox in this build (Q13). The vox thread stays
+  unstarted; revisit only if something depends on it.
+- ✅ **3c Audio.** `GLMediaPlayer` on an SDL2 mixer + stb_vorbis; Java semantics; Q11 restore as a setting
+  (default on); volume sliders; pauses with the menu/focus loss. Verified by WAV capture.
+- ✅ **3e Saves (dev).** `/data/data/<package>/Gangstar2.sav` and `.preferences` live in `work/sandbox/data/`. They
+  are read at boot, so the main menu offers CONTINUE across runs. Packaging moves them to a per-platform user
+  folder (Windows: %APPDATA%; Android: the app's files dir).
 - ⬜ **QoL.** Skip the content warning / intro where possible (`skip_intro`), anisotropic filtering,
   FPS counter overlay. Pause on focus loss is done.
 - **Owner decisions needed along the way:** Q7 (trial/Verizon purchase gate) and Q11 (sound names).

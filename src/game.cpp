@@ -290,6 +290,12 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 dump_hud_at = -1;
             }
             if (frame == 0) native("Gangster2_nativeResume", {env, c_g2});
+            if (const char* msg = jni::take_activity_bounce()) {  // the other activity "closes" at once
+                LOG("Java opened another activity (not available in the port): pause + resume");
+                native("Gangster2_nativePause", {env, c_g2});
+                native("Gangster2_nativeResume", {env, c_g2});
+                ui::toast(msg);
+            }
             if (open_settings_at >= 0 && since_start >= open_settings_at) {  // (automated tests)
                 ui::set_open(true);
                 open_settings_at = -1;

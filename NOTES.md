@@ -457,6 +457,29 @@ PC = svc+4; writing PC (with the Thumb bit) from a hook redirects execution; nes
   (writes +0x3E4 directly, clears +0x3E8 and [+0x280]+0x448 like the original). A neutral accelerometer
   reading is fed every frame so the handler runs. There is no camera roll. Verified left and right.
 
+### Android activities that no longer exist
+- Some menu buttons made Java start another activity: **Gameloft LIVE!** (`OpenGLive` → `GLiveMain`) and
+  **More Games!** (`launchIGP` → `IGPActivity`). On the phone the game went to the background and came
+  back (`nativePause`/`nativeResume`). With the calls as no-ops, GL Live left the main menu frozen
+  (black 3D background) and More Games left all sounds paused. Now both request a "bounce": on the
+  next frame `game.cpp` calls `nativePause` + `nativeResume` and shows a toast. Verified: the menu
+  recovers, `resumeAllSounds` runs, and CONTINUE works afterwards.
+
+### Audio (`src/audio/`)
+- **Output path:** `SoundManager::playEx/stop/...` → `nativePlaySound`/`nativePlaySoundBig`/... (globals
+  `playSoundID` etc. hold the method IDs) → JNI `CallStaticVoidMethod` → the Java `GLMediaPlayer`
+  statics. Each of the 1,736 sounds has an "instances" short: 0 = "big" (MediaPlayer stream), else
+  SoundPool effect (`loadSound(i, n)` then `playSound(i, n, 50.0, rate)`). The game always passes volume
+  **50.0** and gains (logged: sfx 0.5, voice 0.425, music 0.5). Effects: `clamp(50 × sfxGain, 0, 1)`.
+  Streams: `gain(prefix) × 50 / 40` (`dx = 40` on non-Motorola phones), clamped. `setPitch` is called
+  ~25×/s (engine sounds). `setVolume(IIF)` is a no-op in Java too.
+- Java semantics re-implemented in `media_player.cpp` (header lists the deliberate differences). The
+  mixer is SDL2 float stereo with stb_vorbis: effects decoded up front, streams decoded while playing.
+- Sound names: Java's table (1,737, extracted by `tools/extract_sound_table.py` into the git-ignored
+  `work/sound_table.txt`), plus the game's own name for missing ones (Q11).
+- Verified with `--audio-dump`: menu music after the title tap, intro cutscene audio, gameplay
+  ambience and engine; 0 missing files.
+
 ### Input design (`src/input/`)
 - Keyboard and controller fill an abstract `GameInput` (move, camera, 15 actions). That state becomes
   **virtual touches** on whatever controls the game currently shows (live positions from CHudManager),
@@ -551,9 +574,9 @@ None of this applies to a PC port: we replace the whole Android/Java layer ourse
 | Q8 | The 227 `mov pc, reg` jump tables: one GCC pattern or several? | Script over the disassembly (Phase 4 prep) |
 | Q9 | Did this APK + data last run on the owner's device in Sept 2025 (InsTime)? If such a device still exists, it could be used to trace real JNI/GL calls (Frida/jnitrace). | Ask the owner |
 | Q10 | Exact bionic layouts needed for `__sF` (FILE), `_ctype_` tables, `jmp_buf`, `struct stat`, `dirent` | **`_ctype_`/`_tolower_tab_` pointer layout confirmed (2a).** `sysconf` constants confirmed by the game's own calls. `struct stat`/`dirent`/`struct tm` follow the Android 2.x headers but haven't been exercised yet (no `stat` success path, no `opendir` so far); check against AOSP bionic source when they are |
-| Q11 | Restore renamed sounds, or keep the original's silent failures? | Owner's call in Phase 3 (audio). 2a shows a per-slot "use whichever name exists" rule recovers 41 sounds (1,669 → 1,710) |
+| Q11 | Restore renamed sounds, or keep the original's silent failures? | **Implemented as a setting** (`[audio] restore_missing_sounds`, default on, §6c Audio): a slot whose Java name is missing falls back to the game's own name + `.ogg`. **Owner: say if you prefer the phone's behaviour as the default** |
 | Q12 | Where is the `FileManager` singleton created? | **Answered (2a):** `Application::PostPostInit` ("Initializing file manager..."), during the first frames |
-| Q13 | How do we run the `vox::funcUpdate` audio thread safely (second Unicorn instance on a host thread; real mutexes/condition variables in the pthread HLE)? | Phase 3 |
+| Q13 | How do we run the `vox::funcUpdate` audio thread safely? | **Not needed for sound:** `SoundManager` plays everything through the Java `GLMediaPlayer` callbacks, and vox isn't the output path in this build. The thread stays unstarted (logged STUB). Revisit only if something turns out to depend on vox state (watch for missing sounds/hangs) |
 | Q14 | Which performance profile should the PC build use? | **Answered (Phase 3, §6c):** user setting `quality` (default high = profile 1) + `draw_distance` + `mipmaps`, applied by hooking `loadPerformanceProfile` |
 | Q15 | Are the 14 missing `*.english.*.glyph` files and `dummy.tga` optional (the phone data lacked them too)? Does text still render everywhere? | Watch text in menus during Phase 3. So far all menu, tutorial and HUD text seen renders |
 | Q16 | Which steering mode is which (0x80000, 2, 1), and which on-screen control does each use (Wheel +0x2C, SlideControl +0x54/+0x58, buttons)? | Switch "control sets" in Options, then `--dump-hud` while driving. Input already drags a visible Wheel/SlideControl horizontally (untested) |
@@ -645,3 +668,8 @@ None of this applies to a PC port: we replace the whole Android/Java layer ourse
   (Q20 mostly answered), anisotropic filtering, monotonic gettimeofday, `--set` overrides.
 - Next: audio (vox thread + GLMediaPlayer, Q11/Q13), saves, draw-distance A/B; then the remaining
   input questions (Q16, Q17, Q19, Q21).
+- Later: audio (GLMediaPlayer on an SDL2 mixer, verified by WAV capture; Q11 as a setting, Q13 not
+  needed). Saves already persist in the sandbox (CONTINUE works across runs). Fixed two menu traps:
+  Gameloft LIVE! froze the main menu, More Games! left sounds paused (activity "bounce", §6c).
+  Draw-distance A/B screenshots are still to do: time-based scripts drift with load times, so they
+  need a reliable way to reach the same view (e.g. a script "wait until gameplay" step).

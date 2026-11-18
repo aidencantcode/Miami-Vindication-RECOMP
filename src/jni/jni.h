@@ -22,6 +22,9 @@ std::string string_of(uint32_t handle);            // "" for null / non-strings
 
 void report();  // log JNI functions + Java callbacks used
 void set_device_width(int w);  // what GLMediaPlayer.getDeviceWidth() returns (GLSurfaceView width)
+// Non-null once after a Java callback that would have opened another Android activity (Gameloft
+// LIVE!, More Games). The caller does what Android did: nativePause, then nativeResume on return.
+const char* take_activity_bounce();  // the message, or nullptr
 
 constexpr const char* kPkg = "com/gameloft/android/GAND/GloftGMHP/ML/";
 
