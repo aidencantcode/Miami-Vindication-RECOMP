@@ -15,6 +15,8 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)  # our own modules only (we run with python -I)
+# python -I ignores PYTHONUTF8/PYTHONIOENCODING; the Windows console is cp1252.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from elftools.elf.relocation import RelocationSection  # noqa: E402
 
@@ -270,13 +272,163 @@ def step_1b(args):
     return rep.save("run the 448 static constructors")
 
 
+def find_word(emu, value):
+    """Data symbols in the library's RW segment that currently hold `value`."""
+    import struct
+    hits = []
+    for vaddr, memsz, flags in emu.lib.segments:
+        if "W" not in flags:
+            continue
+        blob = emu.read(E.LIB_BASE + vaddr, memsz)
+        needle = struct.pack("<I", value)
+        i = blob.find(needle)
+        while i >= 0:
+            if i % 4 == 0:
+                rel = vaddr + i
+                owner = next((demangle(n) for n, (v, s) in emu.lib.objects.items() if v <= rel < v + max(s, 4)), None)
+                hits.append(f"{owner or 'lib'}@{rel:#x}")
+            i = blob.find(needle, i + 1)
+    return hits
+
+
+def step_1c(args):
+    import jni as J
+    rep = Report("1c")
+    emu, _ = build(args.so, rep, install_hle=True)
+    fj = J.FakeJNI(emu)
+    w = watch_ctype(emu)
+    done, _ = run_constructors(emu, rep)
+    after_init = collections.Counter(emu.calls)
+    rep.md("## Checks")
+    rep.md("")
+    rep.check(done == 448, f"static constructors: {done}/448 returned")
+
+    def native(cls_short, meth, *a):
+        f = emu.func(f"Java_com_gameloft_android_GAND_GloftGMHP_ML_{cls_short}_{meth}")
+        r0, _ = emu.call(f, *a)
+        return r0
+
+    env = fj.env
+    c_media = fj.cls(J.PKG + "GLMediaPlayer")
+    c_res = fj.cls(J.PKG + "GLResLoader")
+    renderer = fj.instance(J.PKG + "GameRenderer")
+    n = m = None
+    names = []
+    seq = []
+    try:
+        native("GameRenderer", "nativeGetJNIEnv", env, renderer)
+        seq.append("GameRenderer.nativeGetJNIEnv()")
+        held = find_word(emu, env)
+        rep.check(bool(held), f"nativeGetJNIEnv stored the JNIEnv* in a global: {', '.join(held) or 'NOT FOUND'}")
+        native("GLResLoader", "nativeInit", env, c_res, 0)
+        seq.append("GLResLoader.nativeInit(0)")
+        native("GLMediaPlayer", "nativeInit", env, c_media, 0)
+        seq.append("GLMediaPlayer.nativeInit(0)")
+        n = s32(native("GLMediaPlayer", "nativeGetTotalSounds", env, c_media))
+        seq.append(f"GLMediaPlayer.nativeGetTotalSounds() = {n}")
+        m = s32(native("GLMediaPlayer", "nativeGetTotalSoundsOfSameInstance", env, c_media))
+        seq.append(f"GLMediaPlayer.nativeGetTotalSoundsOfSameInstance() = {m}")
+    except (E.ProbeError, E.GuestExit) as exc:
+        rep.log(f"JNI sequence stopped after {seq[-1] if seq else 'start'}:\n{exc}")
+    rep.check(len(seq) == 5, f"startup JNI sequence (GameRenderer.onSurfaceCreated, up to the GL-dependent calls) "
+                             f"completed: {' → '.join(seq) if seq else 'nothing'}")
+
+    # Independent cross-check: Java hard-codes the sound list (GLMediaPlayer.cJ) and
+    # sizes its arrays as cV = nativeGetTotalSounds(), plus ONE extra slot on Motorola
+    # devices (GetDeviceType() == 1 -> cV++). So cJ must be exactly native count + 1.
+    java_names = java_sound_table()
+    if java_names is None:
+        rep.check(False, "Java sound table not found (run jadx into analysis/jadx first)")
+    else:
+        rep.check(n is not None and n + 1 == len(java_names),
+                  f"native nativeGetTotalSounds() = {n}; Java's hard-coded GLMediaPlayer.cJ has {len(java_names)} "
+                  f"= native + 1 Motorola-only slot (`if (GetDeviceType()==1) cV++`; extra entry "
+                  f"{java_names[-1]!r})")
+        index = {f.lower() for f in os.listdir(args.data)}
+        missing = [x for x in java_names if x.lower() not in index]
+        rep.md(f"    - of the {len(java_names)} Java sound names, {len(java_names) - len(missing)} exist in the data "
+               f"folder and {len(missing)} do not (renames such as `sfx_aligator_*` vs `sfx_alligator_*`, "
+               f"plus files absent from this data set; see NOTES)")
+    rep.check(not emu.stubbed, f"libc imports hit that are still plain stubs: {', '.join(sorted(emu.stubbed)) or 'none'}")
+
+    # Stretch, not a pass criterion: Java never calls nativeGetSoundFileName in this build.
+    try:
+        h = native("GLMediaPlayer", "nativeGetSoundFileName", env, c_media, 0)
+        rep.md(f"- nativeGetSoundFileName(0) -> {fj.str_of(h)!r}")
+    except (E.ProbeError, E.GuestExit) as exc:
+        first = str(exc).splitlines()
+        where = next((l.strip() for l in first if l.strip().startswith("pc in")), "")
+        rep.md(f"- ℹ️ nativeGetSoundFileName(0) needs state from later init (Java never calls it in this build): "
+               f"{first[1].strip() if len(first) > 1 else first[0]}; {where}")
+        rep.log("info: nativeGetSoundFileName(0) needs later init: " + where)
+
+    rep.md("")
+    rep.md("## JNIEnv functions the native code used (Q1)")
+    rep.md("")
+    rep.md("| JNI function | calls |")
+    rep.md("|---|---:|")
+    for t in fj.trace_order:
+        rep.md(f"| `{t}` | {fj.trace[t]:,} |")
+    rep.md("")
+    rep.md("## Method / field lookups (Q2, Q3)")
+    rep.md("")
+    rep.md("`known` = the (class, name, signature) exists in the decompiled Java (`analysis/jni_surface.md`).")
+    rep.md("")
+    rep.md("| kind | class | name | signature | known |")
+    rep.md("|---|---|---|---|---|")
+    for kind, cname, mname, sig, known in fj.lookups:
+        k = "—" if known is None else ("yes" if known else "**NO**")
+        rep.md(f"| {kind} | `{cname.replace(J.PKG, '')}` | `{mname}` | `{sig}` | {k} |")
+    unknown = [l for l in fj.lookups if l[4] is False]
+    rep.check(not unknown, f"{len(fj.lookups)} method lookups, all match a real Java method ({len(unknown)} unknown)")
+    rep.md("")
+    rep.md("## Java callbacks invoked during this sequence")
+    rep.md("")
+    for (c, mname, sig), k in fj.java_calls.most_common():
+        rep.md(f"- `{c}.{mname}{sig}` × {k}")
+    if not fj.java_calls:
+        rep.md("- none")
+    rep.md("")
+    rep.md("## libc imports used in total (static init + JNI sequence)")
+    rep.md("")
+    rep.md(", ".join(f"`{x}`×{emu.calls[x]}" for x in emu.call_order if not x.startswith(("JNI::", "JVM::"))))
+    rep.md("")
+    extra = collections.Counter({k: v for k, v in emu.calls.items() if not k.startswith(("JNI::", "JVM::"))})
+    extra.subtract(after_init)
+    extra = +extra
+    rep.md("libc imports called by the JNI sequence itself (beyond static init): "
+           + (", ".join(f"`{k}`×{v}" for k, v in extra.most_common()) if extra else "none"))
+    rep.md("")
+    rep.md("## bionic ctype layout check")
+    rep.md("")
+    for line in ctype_findings(emu, w):
+        rep.md(f"- {line}")
+        rep.log(line)
+    return rep.save("first JNI calls with a fake JNIEnv")
+
+
+def s32(v):
+    return v - (1 << 32) if v & 0x80000000 else v
+
+
+def java_sound_table():
+    import re
+    path = os.path.join(ROOT, "analysis", "jadx", "sources", "com", "gameloft", "android", "GAND",
+                        "GloftGMHP", "ML", "GLMediaPlayer.java")
+    if not os.path.exists(path):
+        return None
+    src = open(path, encoding="utf-8").read()
+    m = re.search(r"static String\[\] cJ = \{(.*?)\};", src, re.S)
+    return re.findall(r'"([^"]*)"', m.group(1)) if m else None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("step", choices=["1a", "1b", "1c"])
     ap.add_argument("--so", default=DEFAULT_SO)
     ap.add_argument("--data", default=DEFAULT_DATA)
     args = ap.parse_args()
-    fn = {"1a": step_1a, "1b": step_1b}.get(args.step)
+    fn = {"1a": step_1a, "1b": step_1b, "1c": step_1c}.get(args.step)
     if fn is None:
         print(f"step {args.step} not implemented yet")
         return 2
