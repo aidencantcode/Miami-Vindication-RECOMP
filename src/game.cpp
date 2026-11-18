@@ -39,6 +39,7 @@
 #include "jni/jni.h"
 #include "rt/runtime.h"
 #include "settings/settings.h"
+#include "ui/overlay.h"
 
 namespace fs = std::filesystem;
 using Clock = std::chrono::steady_clock;
@@ -75,6 +76,8 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     if (opt.no_vsync) cfg.vsync = false;
     if (!opt.touch_controls.empty()) cfg.touch_controls = opt.touch_controls;
     if (!opt.quality.empty()) cfg.quality = opt.quality;
+    for (const std::string& o : opt.set)
+        if (!settings::apply_override(&cfg, o)) FATAL("--set %s: unknown setting (expected section.key=value)", o.c_str());
 
     // ---- window + GL ------------------------------------------------------------------------------
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) FATAL("SDL_Init: %s", SDL_GetError());
@@ -111,6 +114,8 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     jni::set_device_width(kW);
     LOG("display: window %dx%d (%s), game %dx%d rendered at x%d, msaa %d", dw, dh, cfg.window_mode.c_str(), kW, kH,
         vc.scale, vc.msaa);
+    gles1::set_anisotropy(cfg.anisotropy);
+    ui::init(win, ctx);
 
     // ---- runtime ----------------------------------------------------------------------------------
     rt::Runtime rt;
@@ -200,7 +205,15 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
         double dump_hud_at = opt.dump_hud_at;
         auto last_report = Clock::now(), frame_start = Clock::now(), prev_frame_start = Clock::now();
         int frames_since = 0;
-        double fps_shown = 0;
+        auto next_deadline = Clock::now();  // frame limiter
+        auto stat_start = Clock::now();  // overlay statistics, refreshed every 0.5 s
+        int stat_frames = 0;
+        double stat_game_ms = 0;
+        ui::FrameStats stats;
+        stats.game_w = kW;
+        stats.game_h = kH;
+        bool menu_was_open = false;
+        double open_settings_at = opt.open_settings_at;
         std::unordered_map<uint32_t, uint64_t> block_counts;
         double game_ms = 0;  // time inside nativeRender (emulated game code + GL calls) since last report
         for (; running && (opt.frames <= 0 || frame < opt.frames); ++frame) {
@@ -228,6 +241,13 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                         paused = false;
                     }
                 }
+                if (ev.type == SDL_CONTROLLERDEVICEADDED) {
+                    const char* name = SDL_GameControllerNameForIndex(ev.cdevice.which);
+                    ui::toast(std::string("Controller connected: ") + (name ? name : "unknown"));
+                } else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
+                    ui::toast("Controller disconnected");
+                }
+                if (ui::handle_event(ev)) continue;  // the settings menu has the input
                 in.handle(ev);
             }
             const double since_start = std::chrono::duration<double>(Clock::now() - loop_start).count();
@@ -243,13 +263,30 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 dump_hud_at = -1;
             }
             if (frame == 0) native("Gangster2_nativeResume", {env, c_g2});
-            // Keyboard / controller -> virtual touches on the current HUD.
-            in.update(frame_dt);
-            if (cfg.touch_controls == "auto")  // hide the touch HUD while a pad or the keyboard drives
-                mods::set_touch_controls_hidden(in.last_device() != input::Device::Touch);
-            const auto t_game = Clock::now();
-            cpu.call(rt.lib_func("Java_com_gameloft_android_GAND_GloftGMHP_ML_GameRenderer_nativeRender"), {env, c_gr});
-            game_ms += std::chrono::duration<double, std::milli>(Clock::now() - t_game).count();
+            if (open_settings_at >= 0 && since_start >= open_settings_at) {  // (automated tests)
+                ui::set_open(true);
+                open_settings_at = -1;
+            }
+            // The settings menu pauses the game: the last frame stays on screen underneath.
+            const bool menu_open = ui::is_open();
+            if (menu_open != menu_was_open) {
+                if (menu_open) in.release_all();
+                else in.suppress_held();  // the button that closed the menu must not reach the game
+                menu_was_open = menu_open;
+            }
+            if (!menu_open) {
+                // Keyboard / controller -> virtual touches on the current HUD.
+                in.update(frame_dt);
+                if (cfg.touch_controls == "auto")  // hide the touch HUD while a pad or the keyboard drives
+                    mods::set_touch_controls_hidden(in.last_device() != input::Device::Touch);
+                else
+                    mods::set_touch_controls_hidden(cfg.touch_controls == "hide");
+                const auto t_game = Clock::now();
+                cpu.call(rt.lib_func("Java_com_gameloft_android_GAND_GloftGMHP_ML_GameRenderer_nativeRender"), {env, c_gr});
+                const double ms = std::chrono::duration<double, std::milli>(Clock::now() - t_game).count();
+                game_ms += ms;
+                stat_game_ms += ms;
+            }
 
             // present the game image into the window
             SDL_GL_GetDrawableSize(win, &dw, &dh);
@@ -266,6 +303,22 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 };
                 gles1::draw_overlay_rects(dw, dh, cross, 4);
             }
+            {  // settings menu / FPS counter / toasts; apply what changed
+                const settings::Settings before = cfg;
+                stats.render_w = kW * gles1::vfb_config().scale;
+                stats.render_h = kH * gles1::vfb_config().scale;
+                if (ui::draw(cfg, stats)) {
+                    if (cfg.window_mode != before.window_mode) apply_window_mode(win, cfg);
+                    if (cfg.vsync != before.vsync) SDL_GL_SetSwapInterval(cfg.vsync ? 1 : 0);
+                    if (cfg.render_scale != before.render_scale || cfg.msaa != before.msaa) {
+                        const int scale = cfg.render_scale > 0 ? cfg.render_scale : settings::auto_render_scale(dh);
+                        if (!gles1::vfb_reconfigure(scale, cfg.msaa)) ui::toast("That anti-aliasing level is not supported");
+                    }
+                    if (cfg.anisotropy != before.anisotropy) gles1::set_anisotropy(cfg.anisotropy);
+                    in.apply_settings(cfg);
+                    settings::save(settings_file, cfg);
+                }
+            }
             bool shot_time = false;
             for (double& t : shots_at_t)
                 if (t >= 0 && since_start >= t) { shot_time = true; t = -1; }
@@ -278,26 +331,37 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
             SDL_GL_SwapWindow(win);
             gles1::vfb_restore_binding();
 
-            if (cfg.fps_limit > 0) {
-                // Sleep most of the way, then spin: Windows sleeps are only ~1 ms accurate even with
-                // a 1 ms timer period, which is too coarse for 144-240 fps frame pacing.
-                const auto target = frame_start + std::chrono::nanoseconds(1000000000LL / cfg.fps_limit);
-                const auto coarse = target - std::chrono::microseconds(1500);
-                if (Clock::now() < coarse) std::this_thread::sleep_until(coarse);
-                while (Clock::now() < target) std::this_thread::yield();
+            int fps_limit = cfg.fps_limit;
+            if (fps_limit < 0) {  // follow the display the window is on
+                SDL_DisplayMode dm;
+                fps_limit = SDL_GetCurrentDisplayMode(std::max(0, SDL_GetWindowDisplayIndex(win)), &dm) == 0 &&
+                                    dm.refresh_rate > 0 ? dm.refresh_rate : 60;
+            }
+            if (fps_limit > 0) {
+                // Fixed cadence: each deadline is the previous one + one period (so per-frame overhead
+                // doesn't drift the rate below the limit); after a slow frame, start over from now.
+                // Sleep most of the way, then spin: Windows sleeps are only ~1 ms accurate, too coarse
+                // for 144-240 fps frame pacing.
+                const auto period = std::chrono::nanoseconds(1000000000LL / fps_limit);
+                next_deadline += period;
+                const auto now = Clock::now();
+                if (next_deadline < now - period || next_deadline > now + 2 * period) next_deadline = now;
+                const auto coarse = next_deadline - std::chrono::microseconds(1500);
+                if (now < coarse) std::this_thread::sleep_until(coarse);
+                while (Clock::now() < next_deadline) std::this_thread::yield();
+            } else {
+                next_deadline = Clock::now();
             }
             ++frames_since;
-            double dt = std::chrono::duration<double>(Clock::now() - last_report).count();
-            if (cfg.show_fps && dt >= 0.5) {
-                const double fps_now = frames_since / dt;
-                if (std::abs(fps_now - fps_shown) >= 0.5) {
-                    fps_shown = fps_now;
-                    char title[128];
-                    std::snprintf(title, sizeof title, "Gangstar: Miami Vindication - %.0f fps (game %.1f ms)", fps_now,
-                                  frames_since ? game_ms / frames_since : 0.0);
-                    SDL_SetWindowTitle(win, title);
-                }
+            ++stat_frames;
+            if (const double sdt = std::chrono::duration<double>(Clock::now() - stat_start).count(); sdt >= 0.5) {
+                stats.fps = stat_frames / sdt;
+                stats.game_ms = stat_frames ? stat_game_ms / stat_frames : 0.0;
+                stat_frames = 0;
+                stat_game_ms = 0;
+                stat_start = Clock::now();
             }
+            double dt = std::chrono::duration<double>(Clock::now() - last_report).count();
             if (dt >= 2.0) {
                 LOG("frame %d: %.1f fps, game %.1f ms/frame, %llu draw calls total, heap %u KB", frame,
                     frames_since / dt, frames_since ? game_ms / frames_since : 0.0,
@@ -363,6 +427,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     for (const auto& s : rt.stubbed()) stubs += s + " ";
     LOG("imports that hit a plain STUB: %s", stubs.empty() ? "none" : stubs.c_str());
 
+    ui::shutdown();
     SDL_GL_DeleteContext(ctx);
     SDL_DestroyWindow(win);
     SDL_Quit();

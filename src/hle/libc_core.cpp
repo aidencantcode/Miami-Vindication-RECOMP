@@ -291,8 +291,14 @@ H(t_time) {
     c.ret(t);
 }
 H(t_gettimeofday) {
+    // The game's frame time step comes from this (glitch::os::Timer: dt = integer ms between frames),
+    // so it must be monotonic: wall time at the first call + a steady clock. A wall-clock jump
+    // (NTP, user changing the time) would otherwise give the game a negative or huge step.
+    using namespace std::chrono;
+    static const auto wall0 = duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
+    static const auto steady0 = steady_clock::now();
     uint32_t tv = a.u32();
-    auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto us = wall0 + duration_cast<microseconds>(steady_clock::now() - steady0).count();
     if (tv) { M.w32(tv, uint32_t(us / 1000000)); M.w32(tv + 4, uint32_t(us % 1000000)); }
     c.ret(0);
 }

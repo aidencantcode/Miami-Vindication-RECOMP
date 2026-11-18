@@ -65,6 +65,10 @@ public:
     void touch(int action, int x, int y, int pointer);
     void key(int android_keycode, bool down);
 
+    void apply_settings(const settings::Settings& s);  // live: deadzone, camera speed, invert Y
+    void release_all();      // lift every virtual touch / key (e.g. when the settings menu opens)
+    void suppress_held();    // ignore keys/buttons already held until they are released
+
     Device last_device() const { return last_device_; }
     // Menu cursor (game coordinates) for the overlay; visible while a pad drives menus.
     bool cursor_visible() const { return cursor_on_; }
@@ -108,6 +112,7 @@ private:
     bool cursor_on_ = false, cursor_pressed_ = false;
     float cursor_x_ = 0, cursor_y_ = 0;
     bool prev_back_ = false, prev_menu_ = false;
+    bool suppress_ = false;
 
     struct Step { int frame; double time; std::string cmd; std::string a; int x, y; bool done; };
     std::vector<Step> script_;

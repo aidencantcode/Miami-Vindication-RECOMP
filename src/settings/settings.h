@@ -11,7 +11,7 @@ struct Settings {
     std::string window_mode = "windowed";  // windowed | borderless | fullscreen
     int window_w = 1280, window_h = 720;    // windowed size
     bool vsync = true;
-    int fps_limit = 60;                     // 0 = no limit (beyond vsync); the phone ran at ~30
+    int fps_limit = -1;                     // -1 = display refresh rate, 0 = unlimited, else 30..360 (the phone ran ~30)
     std::string aspect = "auto";            // game width at 480 high: auto (window) | 4:3 | 5:3 | 16:10 | 16:9 | 21:9
     int render_scale = 0;                   // 0 = auto (>= window resolution), else 1..8 x 480p
     int msaa = 4;                           // 0 | 2 | 4 | 8
@@ -38,6 +38,8 @@ struct Settings {
 
 bool load(const std::filesystem::path& file, Settings* s);   // false if the file did not exist
 bool save(const std::filesystem::path& file, const Settings& s);
+// Command-line override "section.key=value" (not saved unless something else saves the file).
+bool apply_override(Settings* s, const std::string& assignment);
 
 // Derived values
 int logical_width(const Settings& s, int window_w, int window_h);  // game width for a 480-high screen

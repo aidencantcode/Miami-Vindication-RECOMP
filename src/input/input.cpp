@@ -84,6 +84,34 @@ void Input::init(const GameCalls& g, int game_w, int game_h, const settings::Set
     if (pad_) LOG("input: controller \"%s\"", SDL_GameControllerName(pad_));
 }
 
+void Input::apply_settings(const settings::Settings& s) {
+    deadzone_ = std::clamp(s.stick_deadzone, 0.0f, 0.9f);
+    mouse_sens_ = std::clamp(s.mouse_sensitivity, 0.05f, 10.0f);
+    invert_y_ = s.invert_camera_y;
+}
+
+void Input::release_all() {
+    for (int id = P_STICK; id <= P_LAST; ++id) set_vtouch(id, false, 0, 0);
+    if (mouse_down_) {
+        touch(0, vt_[P_MOUSE].x, vt_[P_MOUSE].y, P_MOUSE);
+        mouse_down_ = false;
+    }
+    act_ptr_.fill(0);
+    tap_frames_.fill(0);
+    cursor_pressed_ = false;
+    rmb_down_ = false;
+    rmb_dx_ = rmb_dy_ = 0;
+    key_edge(AK_BACK, false, &prev_back_);
+    key_edge(AK_MENU, false, &prev_menu_);
+    if (tilting_) {
+        mods::set_virtual_steering(false, 0);
+        tilting_ = false;
+        steer_ = 0;
+    }
+}
+
+void Input::suppress_held() { suppress_ = true; }
+
 void Input::set_viewport(int x, int y, int w, int h) {
     vp_x_ = x; vp_y_ = y; vp_w_ = w; vp_h_ = h;
 }
@@ -142,6 +170,8 @@ void Input::handle(const SDL_Event& ev) {
                 last_device_ = Device::Touch;
                 cursor_on_ = false;
                 touch(1, gx, gy, P_MOUSE);
+                vt_[P_MOUSE].x = gx;  // remembered for release_all()
+                vt_[P_MOUSE].y = gy;
             } else if (ev.button.button == SDL_BUTTON_RIGHT) {
                 rmb_down_ = true;
                 last_device_ = Device::Keyboard;  // mouse-look = keyboard+mouse play
@@ -151,6 +181,8 @@ void Input::handle(const SDL_Event& ev) {
             if (mouse_down_) {
                 to_game(ev.motion.x, ev.motion.y, &gx, &gy);
                 touch(2, gx, gy, P_MOUSE);
+                vt_[P_MOUSE].x = gx;
+                vt_[P_MOUSE].y = gy;
             }
             if (rmb_down_) {
                 // window pixels -> game pixels
@@ -417,7 +449,13 @@ void Input::update(double dt) {
         gameplay_ = now_gameplay;
         driving_ = now_driving;
     }
-    const GameInput gi = gather();
+    GameInput gi = gather();
+    if (suppress_) {  // after the settings menu closed: wait until everything is released
+        bool any = gi.mx != 0 || gi.my != 0 || gi.cx != 0 || gi.cy != 0;
+        for (bool b : gi.act) any = any || b;
+        if (any) gi = GameInput{};
+        else suppress_ = false;
+    }
     if (gameplay_) {
         cursor_on_ = false;
         drive_gameplay(controls, gi, dt);

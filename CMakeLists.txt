@@ -10,6 +10,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
 find_package(SDL2 CONFIG REQUIRED)
 find_package(OpenGL REQUIRED)
+find_package(imgui CONFIG REQUIRED)
 # Unicorn: the same 2.1.4 build the Python probe uses, prepared by tools/setup_unicorn.ps1
 # (headers + import lib + DLL under third_party/unicorn, git-ignored).
 set(UNICORN_ROOT "${CMAKE_SOURCE_DIR}/third_party/unicorn" CACHE PATH "Prebuilt Unicorn")
@@ -36,6 +37,7 @@ add_executable(gangstar
     src/input/input.cpp
     src/settings/settings.cpp
     src/game/mods.cpp
+    src/ui/overlay.cpp
     src/game.cpp
     src/selftest.cpp
 )
@@ -44,7 +46,7 @@ target_compile_definitions(gangstar PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX WIN
 if(MSVC)
     target_compile_options(gangstar PRIVATE /W4 /permissive- /utf-8 /wd4100)
 endif()
-target_link_libraries(gangstar PRIVATE SDL2::SDL2 SDL2::SDL2main OpenGL::GL ${UNICORN_TARGET})
+target_link_libraries(gangstar PRIVATE SDL2::SDL2 SDL2::SDL2main OpenGL::GL imgui::imgui ${UNICORN_TARGET})
 
 # Copy runtime DLLs next to the exe.
 add_custom_command(TARGET gangstar POST_BUILD

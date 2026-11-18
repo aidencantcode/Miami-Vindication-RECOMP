@@ -83,6 +83,7 @@ GLuint g_vfb = 0, g_vfb_color = 0, g_vfb_depth = 0;      // what the game sees a
 GLuint g_resolve_fb = 0, g_resolve_color = 0;            // MSAA resolve target (same size, 1 sample)
 GLuint g_read_fb = 0, g_read_color = 0;                  // logical-size target for glReadPixels
 GLuint g_game_fb = 0;                                    // framebuffer the game thinks is bound
+float g_aniso = 1;                                       // anisotropic filtering level (1 = off)
 bool on_screen() { return g_game_fb == 0; }
 int S() { return on_screen() ? g_cfg.scale : 1; }       // scale applied to "screen" coordinates
 
@@ -304,8 +305,20 @@ H(gen_textures) { GLsizei n = a.s32(); glGenTextures(n, static_cast<GLuint*>(con
 H(delete_textures) { GLsizei n = a.s32(); glDeleteTextures(n, static_cast<const GLuint*>(host(c, a.u32()))); }
 H(bind_texture) { GLenum t = a.u32(); glBindTexture(t, a.u32()); }
 H(active_texture) { p_glActiveTexture(a.u32()); }
-H(tex_parameteri) { GLenum t = a.u32(), p = a.u32(); GLint v = a.s32(); glTexParameteri(t, p, v); }
-H(tex_parameterf) { GLenum t = a.u32(), p = a.u32(); float v = a.f32(); glTexParameterf(t, p, v); }
+// Setting a mipmapped minification filter also sets the user's anisotropic filtering level.
+void apply_aniso(GLenum target, GLenum pname, GLint filter) {
+    if (pname != GL_TEXTURE_MIN_FILTER) return;
+    const bool mip = filter == GL_NEAREST_MIPMAP_NEAREST || filter == GL_LINEAR_MIPMAP_NEAREST ||
+                     filter == GL_NEAREST_MIPMAP_LINEAR || filter == GL_LINEAR_MIPMAP_LINEAR;
+    glTexParameterf(target, 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY */, mip ? g_aniso : 1.0f);
+}
+H(tex_parameteri) { GLenum t = a.u32(), p = a.u32(); GLint v = a.s32(); glTexParameteri(t, p, v); apply_aniso(t, p, v); }
+H(tex_parameterf) {
+    GLenum t = a.u32(), p = a.u32();
+    float v = a.f32();
+    glTexParameterf(t, p, v);
+    apply_aniso(t, p, GLint(v));
+}
 H(tex_image_2d) {
     GLenum t = a.u32(); GLint l = a.s32(), ifmt = a.s32(); GLsizei w = a.s32(), h = a.s32(); GLint b = a.s32();
     GLenum f = a.u32(), ty = a.u32();
@@ -442,6 +455,22 @@ void vfb_set_scale(int scale) {
     if (scale < 1 || scale == g_cfg.scale) return;
     g_cfg.scale = scale;
     build_vfb();
+}
+
+bool vfb_reconfigure(int scale, int msaa) {
+    if (scale < 1) scale = 1;
+    if (scale == g_cfg.scale && msaa == g_cfg.msaa) return true;
+    g_cfg.scale = scale;
+    g_cfg.msaa = msaa;
+    if (build_vfb()) return true;
+    g_cfg.msaa = 0;
+    return build_vfb();
+}
+
+void set_anisotropy(int level) {
+    GLfloat max_a = 1;
+    glGetFloatv(0x84FF /* GL_MAX_TEXTURE_MAX_ANISOTROPY */, &max_a);
+    g_aniso = std::clamp(float(level), 1.0f, std::max(1.0f, max_a));
 }
 
 const VfbConfig& vfb_config() { return g_cfg; }

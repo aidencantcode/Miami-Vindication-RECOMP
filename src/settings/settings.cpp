@@ -108,6 +108,18 @@ bool save(const std::filesystem::path& file, const Settings& s) {
     return bool(out);
 }
 
+bool apply_override(Settings* s, const std::string& assignment) {
+    const size_t dot = assignment.find('.'), eq = assignment.find('=');
+    if (dot == std::string::npos || eq == std::string::npos || dot > eq) return false;
+    const std::string sec = assignment.substr(0, dot), key = assignment.substr(dot + 1, eq - dot - 1);
+    for (const Field& f : fields())
+        if (sec == f.section && key == f.key) {
+            f.read(*s, assignment.substr(eq + 1));
+            return true;
+        }
+    return false;
+}
+
 int logical_width(const Settings& s, int window_w, int window_h) {
     static const std::map<std::string, double> fixed = {{"4:3", 4.0 / 3}, {"5:3", 5.0 / 3}, {"16:10", 1.6},
                                                         {"16:9", 16.0 / 9}, {"21:9", 21.0 / 9}};

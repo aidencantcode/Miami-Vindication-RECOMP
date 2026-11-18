@@ -2,7 +2,11 @@
   "name": "gangstar-native",
   "version-string": "0.1.0",
   "dependencies": [
-    "sdl2"
+    "sdl2",
+    {
+      "name": "imgui",
+      "features": [ "opengl3-binding" ]
+    }
   ],
   "builtin-baseline": "ea49500a3353603af1190ca9a786a9015d638ea0"
 }

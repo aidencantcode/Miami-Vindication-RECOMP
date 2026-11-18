@@ -2,6 +2,7 @@
 #include "rt/runtime.h"
 
 #include <string>
+#include <vector>
 
 struct RunOptions {
     int frames = 0;      // 0 = until the window is closed
@@ -19,6 +20,8 @@ struct RunOptions {
     std::string touch_controls;      // override settings: show | hide | auto
     std::string quality;             // override settings: phone | low | high | ultra
     bool no_mods = false;            // run without game/mods hooks (vanilla behaviour, for A/B tests)
+    double open_settings_at = -1;    // open the settings menu at this time (s), for screenshots
+    std::vector<std::string> set;    // settings overrides "section.key=value" (--set, repeatable)
 };
 
 int run_game(const rt::Paths& paths, const RunOptions& opt);

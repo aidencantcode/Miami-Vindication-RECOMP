@@ -28,6 +28,11 @@ struct VfbConfig {
 };
 bool vfb_init(const VfbConfig& cfg);
 void vfb_set_scale(int scale);  // live change (re-creates the FBO)
+bool vfb_reconfigure(int scale, int msaa);  // live change of scale and MSAA (falls back to no MSAA)
+
+// Anisotropic filtering for mipmapped textures (applied when the game sets a texture's
+// minification filter, i.e. as textures load). 1 = off.
+void set_anisotropy(int level);
 const VfbConfig& vfb_config();
 enum class Fit { Aspect, Stretch, Integer };
 // Copy the game image into the window (w x h); returns the rectangle used (for input mapping).
