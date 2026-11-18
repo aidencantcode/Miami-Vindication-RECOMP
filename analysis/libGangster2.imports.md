@@ -1,0 +1,329 @@
+# Imports of work\apk\lib\armeabi\libGangster2.so
+
+DT_NEEDED (search order): libc.so, libGLESv2.so, libGLESv1_CM.so, libstdc++.so, libm.so, libdl.so, liblog.so
+Total imported symbols: 299
+
+Grouping is by API family (old ELF imports carry no library name).
+Objects marked [DATA] are variables, not functions: our shim must provide
+memory with bionic's exact layout for them.
+
+## libc  (94)
+- `__dso_handle` [DATA]
+- `__errno`
+- `__sF` [DATA]
+- `__stack_chk_fail`
+- `__stack_chk_guard` [DATA]
+- `_ctype_` [DATA]
+- `_tolower_tab_` [DATA]
+- `_toupper_tab_` [DATA]
+- `abort`
+- `atoi`
+- `atol`
+- `chdir`
+- `close`
+- `closedir`
+- `exit`
+- `fclose`
+- `fcntl`
+- `feof`
+- `fflush`
+- `fgetpos`
+- `fopen`
+- `fprintf`
+- `fputs`
+- `fread`
+- `fseek`
+- `fsetpos`
+- `fstat`
+- `ftell`
+- `fwrite`
+- `getc`
+- `getenv`
+- `gettimeofday`
+- `gmtime`
+- `localtime`
+- `longjmp`
+- `lrand48`
+- `lseek`
+- `memchr`
+- `memcmp`
+- `memcpy`
+- `memmove`
+- `memset`
+- `mkdir`
+- `mktime`
+- `mmap`
+- `munmap`
+- `open`
+- `opendir`
+- `printf`
+- `putc`
+- `putchar`
+- `puts`
+- `qsort`
+- `read`
+- `readdir`
+- `remove`
+- `sbrk`
+- `setjmp`
+- `setlocale`
+- `setvbuf`
+- `sleep`
+- `snprintf`
+- `sprintf`
+- `srand48`
+- `sscanf`
+- `stat`
+- `strcasecmp`
+- `strcat`
+- `strchr`
+- `strcmp`
+- `strcpy`
+- `strcspn`
+- `strdup`
+- `strlen`
+- `strncasecmp`
+- `strncat`
+- `strncmp`
+- `strncpy`
+- `strrchr`
+- `strstr`
+- `strtod`
+- `strtol`
+- `swprintf`
+- `sysconf`
+- `time`
+- `ungetc`
+- `usleep`
+- `vprintf`
+- `vsnprintf`
+- `vsprintf`
+- `wcscmp`
+- `wcscpy`
+- `wcslen`
+- `write`
+
+## GLES 1.1 (common to ES1/ES2)  (47)
+- `glActiveTexture`
+- `glBindBuffer`
+- `glBindTexture`
+- `glBlendFunc`
+- `glBufferData`
+- `glBufferSubData`
+- `glClear`
+- `glClearColor`
+- `glClearDepthf`
+- `glClearStencil`
+- `glColorMask`
+- `glCompressedTexImage2D`
+- `glCompressedTexSubImage2D`
+- `glCopyTexImage2D`
+- `glCullFace`
+- `glDeleteBuffers`
+- `glDeleteTextures`
+- `glDepthFunc`
+- `glDepthMask`
+- `glDepthRangef`
+- `glDisable`
+- `glDrawArrays`
+- `glDrawElements`
+- `glEnable`
+- `glFlush`
+- `glFrontFace`
+- `glGenBuffers`
+- `glGenTextures`
+- `glGetError`
+- `glGetFloatv`
+- `glGetIntegerv`
+- `glGetString`
+- `glHint`
+- `glLineWidth`
+- `glPixelStorei`
+- `glPolygonOffset`
+- `glReadPixels`
+- `glSampleCoverage`
+- `glScissor`
+- `glStencilFunc`
+- `glStencilMask`
+- `glStencilOp`
+- `glTexImage2D`
+- `glTexParameterf`
+- `glTexParameteri`
+- `glTexSubImage2D`
+- `glViewport`
+
+## libc (ARM EABI runtime helpers: soft-float / int division)  (39)
+- `__aeabi_d2f`
+- `__aeabi_d2iz`
+- `__aeabi_d2lz`
+- `__aeabi_d2uiz`
+- `__aeabi_dadd`
+- `__aeabi_dcmpeq`
+- `__aeabi_dcmpge`
+- `__aeabi_dcmpgt`
+- `__aeabi_dcmple`
+- `__aeabi_dcmplt`
+- `__aeabi_dcmpun`
+- `__aeabi_ddiv`
+- `__aeabi_dmul`
+- `__aeabi_dsub`
+- `__aeabi_f2d`
+- `__aeabi_f2iz`
+- `__aeabi_f2lz`
+- `__aeabi_fadd`
+- `__aeabi_fcmpeq`
+- `__aeabi_fcmpge`
+- `__aeabi_fcmpgt`
+- `__aeabi_fcmple`
+- `__aeabi_fcmplt`
+- `__aeabi_fdiv`
+- `__aeabi_fmul`
+- `__aeabi_fsub`
+- `__aeabi_i2d`
+- `__aeabi_i2f`
+- `__aeabi_idiv`
+- `__aeabi_idivmod`
+- `__aeabi_l2f`
+- `__aeabi_ldivmod`
+- `__aeabi_lmul`
+- `__aeabi_ui2d`
+- `__aeabi_ui2f`
+- `__aeabi_uidiv`
+- `__aeabi_uidivmod`
+- `__aeabi_ul2d`
+- `__aeabi_uldivmod`
+
+## GLES 1.1 (fixed-function, ES1-only)  (34)
+- `glAlphaFunc`
+- `glClientActiveTexture`
+- `glClipPlanef`
+- `glColor4f`
+- `glColor4ub`
+- `glColorPointer`
+- `glDisableClientState`
+- `glEnableClientState`
+- `glFogf`
+- `glFogfv`
+- `glLightModelf`
+- `glLightModelfv`
+- `glLightf`
+- `glLightfv`
+- `glLoadIdentity`
+- `glLoadMatrixf`
+- `glMaterialf`
+- `glMaterialfv`
+- `glMatrixMode`
+- `glMultMatrixf`
+- `glMultiTexCoord4f`
+- `glNormal3f`
+- `glNormalPointer`
+- `glPointParameterf`
+- `glPointParameterfv`
+- `glPointSize`
+- `glPopMatrix`
+- `glPushMatrix`
+- `glShadeModel`
+- `glTexCoordPointer`
+- `glTexEnvf`
+- `glTexEnvfv`
+- `glTexEnvi`
+- `glVertexPointer`
+
+## libm  (31)
+- `__isfinitef`
+- `acos`
+- `acosf`
+- `asin`
+- `asinf`
+- `atan`
+- `atan2`
+- `atan2f`
+- `atanf`
+- `ceil`
+- `ceilf`
+- `cos`
+- `cosf`
+- `exp`
+- `expf`
+- `floor`
+- `floorf`
+- `fmod`
+- `fmodf`
+- `ldexpf`
+- `log`
+- `log10`
+- `logf`
+- `pow`
+- `powf`
+- `sin`
+- `sinf`
+- `sqrt`
+- `sqrtf`
+- `tan`
+- `tanf`
+
+## libc (pthreads / scheduling)  (30)
+- `pthread_attr_destroy`
+- `pthread_attr_init`
+- `pthread_attr_setdetachstate`
+- `pthread_attr_setstacksize`
+- `pthread_cond_broadcast`
+- `pthread_cond_destroy`
+- `pthread_cond_init`
+- `pthread_cond_signal`
+- `pthread_cond_timedwait`
+- `pthread_cond_wait`
+- `pthread_create`
+- `pthread_equal`
+- `pthread_getschedparam`
+- `pthread_getspecific`
+- `pthread_join`
+- `pthread_key_create`
+- `pthread_mutex_destroy`
+- `pthread_mutex_init`
+- `pthread_mutex_lock`
+- `pthread_mutex_trylock`
+- `pthread_mutex_unlock`
+- `pthread_mutexattr_destroy`
+- `pthread_mutexattr_init`
+- `pthread_mutexattr_settype`
+- `pthread_self`
+- `pthread_setschedparam`
+- `pthread_setspecific`
+- `sched_get_priority_max`
+- `sched_get_priority_min`
+- `sched_yield`
+
+## GLES 1.1 (OES extension)  (14)
+- `glBindFramebufferOES`
+- `glBindRenderbufferOES`
+- `glBlendEquationOES`
+- `glCheckFramebufferStatusOES`
+- `glDeleteFramebuffersOES`
+- `glDeleteRenderbuffersOES`
+- `glFramebufferRenderbufferOES`
+- `glFramebufferTexture2DOES`
+- `glGenFramebuffersOES`
+- `glGenRenderbuffersOES`
+- `glGenerateMipmapOES`
+- `glMapBufferOES`
+- `glRenderbufferStorageOES`
+- `glUnmapBufferOES`
+
+## libstdc++ (Android minimal C++ runtime)  (5)
+- `_ZSt7nothrow` [DATA]
+- `_ZnajRKSt9nothrow_t`
+- `__cxa_guard_acquire`
+- `__cxa_guard_release`
+- `__cxa_pure_virtual`
+
+## C++ unwinder (libgcc/libstdc++)  (2)
+- `__aeabi_unwind_cpp_pr0`
+- `__aeabi_unwind_cpp_pr1`
+
+## liblog  (2)
+- `__android_log_print`
+- `__android_log_write`
+
+## libc (C++ ABI support)  (1)
+- `__aeabi_atexit`
