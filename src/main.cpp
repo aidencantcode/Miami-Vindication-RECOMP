@@ -13,6 +13,8 @@
 
 #include "core/log.h"
 
+#include "game.h"
+
 int run_selftest_load(const std::string& so_path);
 
 namespace fs = std::filesystem;
@@ -80,13 +82,22 @@ int main(int argc, char** argv) {
     fs::create_directories(root.empty() ? fs::path("build") : root / "build");
     core::log_open(((root.empty() ? fs::path(".") : root) / "build" / "runtime.log").string().c_str());
 
-    std::string mode = argc > 1 ? argv[1] : "--window";
+    std::string mode = argc > 1 ? argv[1] : "--run";
     int frames = 0;
-    for (int i = 1; i + 1 < argc; ++i)
-        if (!std::strcmp(argv[i], "--frames")) frames = std::atoi(argv[i + 1]);
+    RunOptions opt;
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (!std::strcmp(argv[i], "--frames")) frames = opt.frames = std::atoi(argv[i + 1]);
+        if (!std::strcmp(argv[i], "--shot-every")) opt.shot_every = std::atoi(argv[i + 1]);
+        if (!std::strcmp(argv[i], "--demo")) opt.demo = std::atoi(argv[i + 1]);
+    }
 
     int rc = 0;
-    if (mode == "--selftest-load") {
+    if (mode == "--run") {
+        if (root.empty()) FATAL("project root not found (expected work/apk/lib/armeabi/libGangster2.so)");
+        rt::Paths p{root, root / "work" / "apk" / "lib" / "armeabi" / "libGangster2.so",
+                    root / "original" / "gameloft" / "games" / "Gangstar2", root / "work" / "sandbox"};
+        rc = run_game(p, opt);
+    } else if (mode == "--selftest-load") {
         std::string so = argc > 2 && argv[2][0] != '-' ? argv[2]
                                                        : (root / "work" / "apk" / "lib" / "armeabi" / "libGangster2.so").string();
         rc = run_selftest_load(so);

@@ -18,8 +18,11 @@ if (-not $env:VCPKG_ROOT) { $env:VCPKG_ROOT = Join-Path $vs "VC\vcpkg" }
 Push-Location $root
 try {
     if (-not (Test-Path "third_party\unicorn\lib\unicorn.lib")) { & "$PSScriptRoot\setup_unicorn.ps1" }
-    cmake --preset win-x64
+    # Native tools print warnings on stderr; PowerShell 5.1 would treat those as errors
+    # under "Stop", so judge success by exit codes instead.
+    $ErrorActionPreference = "Continue"
+    cmake --preset win-x64 2>&1 | ForEach-Object { "$_" }
     if ($LASTEXITCODE) { throw "configure failed" }
-    cmake --build --preset $Config
+    cmake --build --preset $Config 2>&1 | ForEach-Object { "$_" }
     if ($LASTEXITCODE) { throw "build failed" }
 } finally { Pop-Location }

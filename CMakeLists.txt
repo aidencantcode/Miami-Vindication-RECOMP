@@ -10,19 +10,15 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
 find_package(SDL2 CONFIG REQUIRED)
 find_package(OpenGL REQUIRED)
-find_package(unicorn CONFIG QUIET)
-if(NOT unicorn_FOUND)
-    # Fallback: a prebuilt Unicorn (headers + import lib + DLL) under third_party/unicorn
-    set(UNICORN_ROOT "${CMAKE_SOURCE_DIR}/third_party/unicorn" CACHE PATH "Prebuilt Unicorn")
-    add_library(unicorn SHARED IMPORTED)
-    set_target_properties(unicorn PROPERTIES
-        IMPORTED_IMPLIB "${UNICORN_ROOT}/lib/unicorn.lib"
-        IMPORTED_LOCATION "${UNICORN_ROOT}/bin/unicorn.dll"
-        INTERFACE_INCLUDE_DIRECTORIES "${UNICORN_ROOT}/include")
-    set(UNICORN_TARGET unicorn)
-else()
-    set(UNICORN_TARGET unicorn::unicorn)
-endif()
+# Unicorn: the same 2.1.4 build the Python probe uses, prepared by tools/setup_unicorn.ps1
+# (headers + import lib + DLL under third_party/unicorn, git-ignored).
+set(UNICORN_ROOT "${CMAKE_SOURCE_DIR}/third_party/unicorn" CACHE PATH "Prebuilt Unicorn")
+add_library(unicorn SHARED IMPORTED)
+set_target_properties(unicorn PROPERTIES
+    IMPORTED_IMPLIB "${UNICORN_ROOT}/lib/unicorn.lib"
+    IMPORTED_LOCATION "${UNICORN_ROOT}/bin/unicorn.dll"
+    INTERFACE_INCLUDE_DIRECTORIES "${UNICORN_ROOT}/include")
+set(UNICORN_TARGET unicorn)
 
 add_executable(gangstar
     src/main.cpp
@@ -31,6 +27,13 @@ add_executable(gangstar
     src/loader/elf_image.cpp
     src/hle/imports.cpp
     src/hle/bionic_data.cpp
+    src/hle/libc_core.cpp
+    src/hle/libc_stdio.cpp
+    src/cpu/cpu.cpp
+    src/rt/runtime.cpp
+    src/jni/jni.cpp
+    src/gl/gles1.cpp
+    src/game.cpp
     src/selftest.cpp
 )
 target_include_directories(gangstar PRIVATE src)
