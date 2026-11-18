@@ -1,6 +1,7 @@
 #include "rt/runtime.h"
 
 #include <cstring>
+#include <iterator>
 
 #include "core/layout.h"
 #include "core/log.h"
@@ -9,15 +10,27 @@ namespace rt {
 
 namespace {
 
+#include "cpu/fastpath_code.inc"
+
 constexpr int kStubLogLimit = 3;
 
 }  // namespace
 
-bool Runtime::init(const Paths& paths, std::string* err) {
+bool Runtime::init(const Paths& paths, std::string* err, bool fastpath) {
     paths_ = paths;
     if (!mem_.init()) return *err = "cannot reserve guest address space", false;
     if (!imports_.init(mem_)) return *err = "cannot map trap/data regions", false;
     using namespace layout;
+    if (fastpath) {
+        if (!mem_.map(kFastBase, kFastSize, core::PROT_R | core::PROT_X, "fastpath"))
+            return *err = "cannot map fastpath region", false;
+        static_assert(sizeof(kFastpathCode) <= kFastSize, "fastpath code too large");
+        mem_.write(kFastBase, kFastpathCode, sizeof kFastpathCode);
+        std::unordered_map<std::string, uint32_t> m;
+        for (const auto& s : kFastpathSyms) m[s.name] = kFastBase + s.offset;  // ARM code: even address
+        imports_.set_fastpath(std::move(m));
+        LOG("fastpath: %zu runtime helpers run as guest VFP code", std::size(kFastpathSyms));
+    }
     // Everything the HLE layer hands out is committed up front, so guest memory is never
     // remapped while guest code runs (important once several guest threads exist).
     if (!mem_.map(kHleHeapBase, kHleHeapSize, core::PROT_R | core::PROT_W, "HLE heap") ||

@@ -4,6 +4,8 @@
 #include <SDL_opengl.h>
 #include <SDL_opengl_glext.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <map>
 #include <string>
@@ -50,7 +52,9 @@ typedef void(APIENTRY* PFNGLMULTITEXCOORD4FPROC)(GLenum target, GLfloat s, GLflo
     X(PFNGLGENFRAMEBUFFERSPROC, glGenFramebuffers)                                                       \
     X(PFNGLGENRENDERBUFFERSPROC, glGenRenderbuffers)                                                     \
     X(PFNGLGENERATEMIPMAPPROC, glGenerateMipmap)                                                         \
-    X(PFNGLRENDERBUFFERSTORAGEPROC, glRenderbufferStorage)
+    X(PFNGLRENDERBUFFERSTORAGEPROC, glRenderbufferStorage)                                               \
+    X(PFNGLRENDERBUFFERSTORAGEMULTISAMPLEPROC, glRenderbufferStorageMultisample)                         \
+    X(PFNGLBLITFRAMEBUFFERPROC, glBlitFramebuffer)
 
 #define DECLARE(type, name) type p_##name = nullptr;
 GL_EXT_FUNCS(DECLARE)
@@ -72,6 +76,63 @@ const char* kExtensions =
     "GL_OES_read_format GL_OES_rgb8_rgba8 GL_OES_single_precision GL_OES_stencil8 GL_OES_texture_cube_map "
     "GL_OES_texture_mirrored_repeat";
 std::unordered_map<uint32_t, uint32_t> g_strings;  // GL name -> guest pointer
+
+// ---- virtual default framebuffer (see gles1.h) -------------------------------------------------------
+VfbConfig g_cfg;
+GLuint g_vfb = 0, g_vfb_color = 0, g_vfb_depth = 0;      // what the game sees as framebuffer 0
+GLuint g_resolve_fb = 0, g_resolve_color = 0;            // MSAA resolve target (same size, 1 sample)
+GLuint g_read_fb = 0, g_read_color = 0;                  // logical-size target for glReadPixels
+GLuint g_game_fb = 0;                                    // framebuffer the game thinks is bound
+bool on_screen() { return g_game_fb == 0; }
+int S() { return on_screen() ? g_cfg.scale : 1; }       // scale applied to "screen" coordinates
+
+void make_rb(GLuint* rb, GLenum fmt, int w, int h, int samples) {
+    if (!*rb) p_glGenRenderbuffers(1, rb);
+    p_glBindRenderbuffer(GL_RENDERBUFFER, *rb);
+    if (samples) p_glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, fmt, w, h);
+    else p_glRenderbufferStorage(GL_RENDERBUFFER, fmt, w, h);
+}
+
+bool build_vfb() {
+    const int w = g_cfg.logical_w * g_cfg.scale, h = g_cfg.logical_h * g_cfg.scale;
+    if (!g_vfb) p_glGenFramebuffers(1, &g_vfb);
+    make_rb(&g_vfb_color, GL_RGBA8, w, h, g_cfg.msaa);
+    make_rb(&g_vfb_depth, GL_DEPTH24_STENCIL8, w, h, g_cfg.msaa);
+    p_glBindFramebuffer(GL_FRAMEBUFFER, g_vfb);
+    p_glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, g_vfb_color);
+    p_glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, g_vfb_depth);
+    GLenum st = p_glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (g_cfg.msaa) {
+        if (!g_resolve_fb) p_glGenFramebuffers(1, &g_resolve_fb);
+        make_rb(&g_resolve_color, GL_RGBA8, w, h, 0);
+        p_glBindFramebuffer(GL_FRAMEBUFFER, g_resolve_fb);
+        p_glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, g_resolve_color);
+    }
+    if (!g_read_fb) p_glGenFramebuffers(1, &g_read_fb);
+    make_rb(&g_read_color, GL_RGBA8, g_cfg.logical_w, g_cfg.logical_h, 0);
+    p_glBindFramebuffer(GL_FRAMEBUFFER, g_read_fb);
+    p_glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, g_read_color);
+    p_glBindFramebuffer(GL_FRAMEBUFFER, g_game_fb ? g_game_fb : g_vfb);
+    if (st != GL_FRAMEBUFFER_COMPLETE) {
+        LOG("GL: virtual framebuffer %dx%d (msaa %d) incomplete: %#x", w, h, g_cfg.msaa, st);
+        return false;
+    }
+    LOG("GL: virtual framebuffer %dx%d (logical %dx%d x%d, msaa %d)", w, h, g_cfg.logical_w, g_cfg.logical_h,
+        g_cfg.scale, g_cfg.msaa);
+    return true;
+}
+
+// The single-sample framebuffer holding the current "screen" image (resolving MSAA if needed).
+GLuint screen_source() {
+    if (!g_cfg.msaa) return g_vfb;
+    const int w = g_cfg.logical_w * g_cfg.scale, h = g_cfg.logical_h * g_cfg.scale;
+    p_glBindFramebuffer(GL_READ_FRAMEBUFFER, g_vfb);
+    p_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_resolve_fb);
+    p_glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    return g_resolve_fb;
+}
+
+void bind_game_fb() { p_glBindFramebuffer(GL_FRAMEBUFFER, g_game_fb ? g_game_fb : g_vfb); }
 
 // Buffer-object state needed to interpret pointer arguments.
 uint32_t g_array_buffer = 0, g_element_buffer = 0;
@@ -103,13 +164,17 @@ H(depth_func) { glDepthFunc(a.u32()); }
 H(depth_mask) { glDepthMask(GLboolean(a.u32())); }
 H(depth_rangef) { float n = a.f32(), f = a.f32(); glDepthRange(n, f); }
 H(polygon_offset) { float f = a.f32(), u = a.f32(); glPolygonOffset(f, u); }
-H(line_width) { glLineWidth(a.f32()); }
-H(point_size) { glPointSize(a.f32()); }
-H(point_param_f) { GLenum p = a.u32(); float v = a.f32(); p_glPointParameterf(p, v); }
+H(line_width) { glLineWidth(a.f32() * S()); }
+H(point_size) { glPointSize(a.f32() * S()); }
+H(point_param_f) {
+    GLenum p = a.u32(); float v = a.f32();
+    if (p == GL_POINT_SIZE_MIN || p == GL_POINT_SIZE_MAX) v *= S();
+    p_glPointParameterf(p, v);
+}
 H(point_param_fv) { GLenum p = a.u32(); p_glPointParameterfv(p, static_cast<const GLfloat*>(host(c, a.u32()))); }
 H(sample_coverage) { float v = a.f32(); GLboolean inv = GLboolean(a.u32()); p_glSampleCoverage(v, inv); }
-H(scissor) { GLint x = a.s32(), y = a.s32(); GLsizei w = a.s32(), h = a.s32(); glScissor(x, y, w, h); }
-H(viewport) { GLint x = a.s32(), y = a.s32(); GLsizei w = a.s32(), h = a.s32(); glViewport(x, y, w, h); }
+H(scissor) { GLint x = a.s32(), y = a.s32(); GLsizei w = a.s32(), h = a.s32(); int s = S(); glScissor(x * s, y * s, w * s, h * s); }
+H(viewport) { GLint x = a.s32(), y = a.s32(); GLsizei w = a.s32(), h = a.s32(); int s = S(); glViewport(x * s, y * s, w * s, h * s); }
 H(shade_model) { glShadeModel(a.u32()); }
 H(hint) { GLenum t = a.u32(), m = a.u32(); glHint(t, m); }
 H(stencil_func) { GLenum f = a.u32(); GLint r = a.s32(); GLuint m = a.u32(); glStencilFunc(f, r, m); }
@@ -141,8 +206,21 @@ H(get_string) {
     }
     c.ret(it->second);
 }
-H(get_integerv) { GLenum p = a.u32(); glGetIntegerv(p, static_cast<GLint*>(const_cast<void*>(host(c, a.u32())))); }
-H(get_floatv) { GLenum p = a.u32(); glGetFloatv(p, static_cast<GLfloat*>(const_cast<void*>(host(c, a.u32())))); }
+H(get_integerv) {
+    GLenum p = a.u32();
+    GLint* out = static_cast<GLint*>(const_cast<void*>(host(c, a.u32())));
+    if (p == GL_FRAMEBUFFER_BINDING) { *out = GLint(g_game_fb); return; }
+    glGetIntegerv(p, out);
+    if ((p == GL_VIEWPORT || p == GL_SCISSOR_BOX) && S() > 1)
+        for (int i = 0; i < 4; ++i) out[i] /= S();
+}
+H(get_floatv) {
+    GLenum p = a.u32();
+    GLfloat* out = static_cast<GLfloat*>(const_cast<void*>(host(c, a.u32())));
+    glGetFloatv(p, out);
+    if ((p == GL_VIEWPORT || p == GL_SCISSOR_BOX) && S() > 1)
+        for (int i = 0; i < 4; ++i) out[i] /= float(S());
+}
 
 // ---- fixed-function pipeline ---------------------------------------------------------------------
 H(matrix_mode) { glMatrixMode(a.u32()); }
@@ -251,12 +329,28 @@ H(compressed_tex_subimage_2d) {
 H(copy_tex_image_2d) {
     GLenum t = a.u32(); GLint l = a.s32(); GLenum ifmt = a.u32(); GLint x = a.s32(), y = a.s32();
     GLsizei w = a.s32(), h = a.s32(); GLint b = a.s32();
-    glCopyTexImage2D(t, l, ifmt, x, y, w, h, b);
+    if (!on_screen()) return glCopyTexImage2D(t, l, ifmt, x, y, w, h, b);
+    // Copy from the high-resolution screen: the texture gets scale x the pixels (sharper effects);
+    // texture coordinates are normalised, so the game is unaffected.
+    const int s = g_cfg.scale;
+    p_glBindFramebuffer(GL_READ_FRAMEBUFFER, screen_source());
+    glCopyTexImage2D(t, l, ifmt, x * s, y * s, w * s, h * s, b);
+    bind_game_fb();
 }
 H(generate_mipmap) { p_glGenerateMipmap(a.u32()); }
 H(read_pixels) {
     GLint x = a.s32(), y = a.s32(); GLsizei w = a.s32(), h = a.s32(); GLenum f = a.u32(), t = a.u32();
-    glReadPixels(x, y, w, h, f, t, const_cast<void*>(host(c, a.u32())));
+    void* out = const_cast<void*>(host(c, a.u32()));
+    if (!on_screen() || (g_cfg.scale == 1 && !g_cfg.msaa)) return glReadPixels(x, y, w, h, f, t, out);
+    // Downscale the screen into a logical-size buffer so the game gets exactly w*h pixels.
+    const int s = g_cfg.scale;
+    p_glBindFramebuffer(GL_READ_FRAMEBUFFER, screen_source());
+    p_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_read_fb);
+    p_glBlitFramebuffer(0, 0, g_cfg.logical_w * s, g_cfg.logical_h * s, 0, 0, g_cfg.logical_w, g_cfg.logical_h,
+                        GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    p_glBindFramebuffer(GL_READ_FRAMEBUFFER, g_read_fb);
+    glReadPixels(x, y, w, h, f, t, out);
+    bind_game_fb();
 }
 
 // ---- framebuffer objects (OES -> core; enum values are identical) ----------------------------------
@@ -264,7 +358,11 @@ H(gen_framebuffers) { GLsizei n = a.s32(); p_glGenFramebuffers(n, static_cast<GL
 H(gen_renderbuffers) { GLsizei n = a.s32(); p_glGenRenderbuffers(n, static_cast<GLuint*>(const_cast<void*>(host(c, a.u32())))); }
 H(delete_framebuffers) { GLsizei n = a.s32(); p_glDeleteFramebuffers(n, static_cast<const GLuint*>(host(c, a.u32()))); }
 H(delete_renderbuffers) { GLsizei n = a.s32(); p_glDeleteRenderbuffers(n, static_cast<const GLuint*>(host(c, a.u32()))); }
-H(bind_framebuffer) { GLenum t = a.u32(); p_glBindFramebuffer(t, a.u32()); }
+H(bind_framebuffer) {
+    GLenum t = a.u32();
+    g_game_fb = a.u32();
+    p_glBindFramebuffer(t, g_game_fb ? g_game_fb : g_vfb);  // "0" is our virtual screen
+}
 H(bind_renderbuffer) { GLenum t = a.u32(); p_glBindRenderbuffer(t, a.u32()); }
 H(renderbuffer_storage) { GLenum t = a.u32(), f = a.u32(); GLsizei w = a.s32(), h = a.s32(); p_glRenderbufferStorage(t, f, w, h); }
 H(framebuffer_renderbuffer) { GLenum t = a.u32(), at = a.u32(), rt = a.u32(); p_glFramebufferRenderbuffer(t, at, rt, a.u32()); }
@@ -333,6 +431,61 @@ void register_handlers(rt::Runtime& rt) {
 }
 
 uint64_t draw_calls() { return g_draws; }
+
+bool vfb_init(const VfbConfig& cfg) {
+    g_cfg = cfg;
+    if (g_cfg.scale < 1) g_cfg.scale = 1;
+    return build_vfb();
+}
+
+void vfb_set_scale(int scale) {
+    if (scale < 1 || scale == g_cfg.scale) return;
+    g_cfg.scale = scale;
+    build_vfb();
+}
+
+const VfbConfig& vfb_config() { return g_cfg; }
+
+void vfb_present(int win_w, int win_h, Fit fit, bool linear, int* rx, int* ry, int* rw, int* rh) {
+    // Save the GL state we touch, so the game's (possibly one-time) settings survive.
+    GLint vp[4], sb[4];
+    GLfloat cc[4];
+    GLboolean cm[4], scissor = glIsEnabled(GL_SCISSOR_TEST);
+    glGetIntegerv(GL_VIEWPORT, vp);
+    glGetIntegerv(GL_SCISSOR_BOX, sb);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, cc);
+    glGetBooleanv(GL_COLOR_WRITEMASK, cm);
+
+    const int lw = g_cfg.logical_w, lh = g_cfg.logical_h, sw = lw * g_cfg.scale, sh = lh * g_cfg.scale;
+    int w = win_w, h = win_h;
+    if (fit == Fit::Aspect || fit == Fit::Integer) {
+        double k = std::min(double(win_w) / lw, double(win_h) / lh);
+        if (fit == Fit::Integer && k >= 1.0) k = std::floor(k);
+        w = int(lw * k + 0.5);
+        h = int(lh * k + 0.5);
+    }
+    const int x = (win_w - w) / 2, y = (win_h - h) / 2;  // y from the top
+    GLuint src = screen_source();
+    p_glBindFramebuffer(GL_READ_FRAMEBUFFER, src);
+    p_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glViewport(0, 0, win_w, win_h);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    p_glBlitFramebuffer(0, 0, sw, sh, x, win_h - y - h, x + w, win_h - y, GL_COLOR_BUFFER_BIT,
+                        linear ? GL_LINEAR : GL_NEAREST);
+    *rx = x; *ry = y; *rw = w; *rh = h;
+
+    glViewport(vp[0], vp[1], vp[2], vp[3]);
+    glScissor(sb[0], sb[1], sb[2], sb[3]);
+    if (scissor) glEnable(GL_SCISSOR_TEST);
+    glClearColor(cc[0], cc[1], cc[2], cc[3]);
+    glColorMask(cm[0], cm[1], cm[2], cm[3]);
+    // Leave framebuffer 0 (the window) bound for overlay drawing; vfb_restore_binding() rebinds the game's.
+}
+
+void vfb_restore_binding() { bind_game_fb(); }
 
 bool screenshot(const char* path, int w, int h) {
     GLint read_fb = 0, pack = 4;

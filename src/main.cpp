@@ -16,6 +16,7 @@
 #include "game.h"
 
 int run_selftest_load(const std::string& so_path);
+int run_selftest_fastpath(const rt::Paths& paths);
 
 namespace fs = std::filesystem;
 
@@ -85,20 +86,27 @@ int main(int argc, char** argv) {
     std::string mode = argc > 1 ? argv[1] : "--run";
     int frames = 0;
     RunOptions opt;
+    for (int i = 1; i < argc; ++i)
+        if (!std::strcmp(argv[i], "--profile-traps")) opt.profile_traps = true;
     for (int i = 1; i + 1 < argc; ++i) {
         if (!std::strcmp(argv[i], "--frames")) frames = opt.frames = std::atoi(argv[i + 1]);
         if (!std::strcmp(argv[i], "--shot-every")) opt.shot_every = std::atoi(argv[i + 1]);
         if (!std::strcmp(argv[i], "--demo")) opt.demo = std::atoi(argv[i + 1]);
         if (!std::strcmp(argv[i], "--input")) opt.input = argv[i + 1];
         if (!std::strcmp(argv[i], "--shots-at")) opt.shots_at = argv[i + 1];
+        if (!std::strcmp(argv[i], "--game-size")) std::sscanf(argv[i + 1], "%dx%d", &opt.game_w, &opt.game_h);
     }
 
     int rc = 0;
+    rt::Paths p{root, root / "work" / "apk" / "lib" / "armeabi" / "libGangster2.so",
+                root / "original" / "gameloft" / "games" / "Gangstar2", root / "work" / "sandbox",
+                root / "work" / "user"};
+    if ((mode == "--run" || mode == "--selftest-fastpath") && root.empty())
+        FATAL("project root not found (expected work/apk/lib/armeabi/libGangster2.so)");
     if (mode == "--run") {
-        if (root.empty()) FATAL("project root not found (expected work/apk/lib/armeabi/libGangster2.so)");
-        rt::Paths p{root, root / "work" / "apk" / "lib" / "armeabi" / "libGangster2.so",
-                    root / "original" / "gameloft" / "games" / "Gangstar2", root / "work" / "sandbox"};
         rc = run_game(p, opt);
+    } else if (mode == "--selftest-fastpath") {
+        rc = run_selftest_fastpath(p);
     } else if (mode == "--selftest-load") {
         std::string so = argc > 2 && argv[2][0] != '-' ? argv[2]
                                                        : (root / "work" / "apk" / "lib" / "armeabi" / "libGangster2.so").string();

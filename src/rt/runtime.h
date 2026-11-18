@@ -21,11 +21,14 @@ struct Paths {
     std::filesystem::path so;         // libGangster2.so
     std::filesystem::path data;       // game data folder (read-only)
     std::filesystem::path sandbox;    // where guest writes go
+    std::filesystem::path user;       // settings.ini etc.
 };
 
 class Runtime {
 public:
-    bool init(const Paths& paths, std::string* err);
+    // fastpath: run the ARM EABI float/division helpers as guest VFP code (src/cpu/fastpath.S)
+    // instead of trapping to C++ for every call. Off = the original (slow, simplest) path.
+    bool init(const Paths& paths, std::string* err, bool fastpath = true);
 
     core::GuestMemory& mem() { return mem_; }
     const loader::ElfImage& elf() const { return elf_; }

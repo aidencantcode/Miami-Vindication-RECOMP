@@ -33,6 +33,7 @@ uint32_t ImportTable::add_trap(const std::string& name) {
 
 uint32_t ImportTable::resolve(const loader::Sym& s) {
     if (auto it = data_.find(s.name); it != data_.end()) return it->second;
+    if (auto it = fastpath_.find(s.name); it != fastpath_.end()) return it->second;
     if (s.type == loader::STT_OBJECT) {
         // Unknown data import: give it zeroed memory but remember it (reported as a failure).
         unresolved_objects_.push_back(s.name);

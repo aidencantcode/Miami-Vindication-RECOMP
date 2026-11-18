@@ -21,6 +21,7 @@ uint32_t new_string(const std::string& utf8);      // jstring handle
 std::string string_of(uint32_t handle);            // "" for null / non-strings
 
 void report();  // log JNI functions + Java callbacks used
+void set_device_width(int w);  // what GLMediaPlayer.getDeviceWidth() returns (GLSurfaceView width)
 
 constexpr const char* kPkg = "com/gameloft/android/GAND/GloftGMHP/ML/";
 

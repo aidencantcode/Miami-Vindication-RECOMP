@@ -75,6 +75,7 @@ struct JObj {
 
 rt::Runtime* g_rt = nullptr;
 uint32_t g_env = 0, g_vm = 0;
+int g_device_width = 800;
 uint32_t g_next_handle = layout::kHandleBase + 0x100;
 std::unordered_map<uint32_t, JObj> g_objs;
 std::unordered_map<std::string, uint32_t> g_classes;
@@ -143,7 +144,7 @@ const std::map<std::tuple<std::string, std::string, std::string>, JavaMethod>& j
         // GLMediaPlayer: device info (audio is a no-op until Phase 3)
         add("GLMediaPlayer", "GetDeviceType", "()I", [](auto&) { return ret_i(-1); });   // non-Motorola/Samsung/HTC
         add("GLMediaPlayer", "detectPhoneLang", "()I", [](auto&) { return ret_i(0); });  // English
-        add("GLMediaPlayer", "getDeviceWidth", "()I", [](auto&) { return ret_i(800); });
+        add("GLMediaPlayer", "getDeviceWidth", "()I", [](auto&) { return ret_i(g_device_width); });
         add("GLMediaPlayer", "loadMovie", "(Ljava/lang/String;)I", [](auto&) { return ret_i(1); });
         add("GLMediaPlayer", "isMediaPlaying", "(I)I", [](auto&) { return ret_i(0); });
         add("GLMediaPlayer", "isSoundLoaded", "(II)I", [](auto&) { return ret_i(0); });
@@ -345,6 +346,8 @@ void install(rt::Runtime& rt) {
 }
 
 uint32_t env() { return g_env; }
+
+void set_device_width(int w) { g_device_width = w; }
 
 uint32_t find_class(const std::string& name) {
     auto it = g_classes.find(name);

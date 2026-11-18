@@ -31,7 +31,12 @@ public:
 
     const std::vector<std::string>& unresolved_objects() const { return unresolved_objects_; }
 
+    // Imports implemented as guest code (no trap): name -> guest address.
+    void set_fastpath(std::unordered_map<std::string, uint32_t> m) { fastpath_ = std::move(m); }
+    bool is_fastpath(const std::string& name) const { return fastpath_.count(name) != 0; }
+
 private:
+    std::unordered_map<std::string, uint32_t> fastpath_;
     core::GuestMemory* mem_ = nullptr;
     core::BumpAllocator data_alloc_;
     std::vector<std::string> traps_;

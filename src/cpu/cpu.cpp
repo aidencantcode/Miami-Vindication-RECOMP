@@ -79,7 +79,16 @@ double Args::f64() {
 // ----------------------------------------------------------------------------- Cpu
 Cpu::Cpu(rt::Runtime& rt, uint32_t stack_top, const char* name) : rt_(rt), name_(name), stack_top_(stack_top) {
     check_uc(uc_open(UC_ARCH_ARM, UC_MODE_ARM, &uc_), "uc_open");
-    check_uc(uc_ctl_set_cpu_model(uc_, UC_CPU_ARM_926), "set cpu model ARM926");  // ARMv5TE
+    // Cortex-A15 (ARMv7-A + VFPv4 + hardware divide). The game is ARMv5TE code, which ARMv7 runs
+    // unchanged; the phone itself (Tegra 2) was a Cortex-A9, so ARMv7 behaviour (e.g. unaligned
+    // LDR) is the faithful one. VFP + SDIV are what the guest-side fastpath helpers use.
+    check_uc(uc_ctl_set_cpu_model(uc_, UC_CPU_ARM_CORTEX_A15), "set cpu model Cortex-A15");
+    uint32_t cpacr = 0;
+    uc_reg_read(uc_, UC_ARM_REG_C1_C0_2, &cpacr);
+    cpacr |= 0xF << 20;  // full access to cp10/cp11 (VFP)
+    check_uc(uc_reg_write(uc_, UC_ARM_REG_C1_C0_2, &cpacr), "enable cp10/cp11");
+    uint32_t fpexc = 0x40000000;  // FPEXC.EN
+    check_uc(uc_reg_write(uc_, UC_ARM_REG_FPEXC, &fpexc), "enable VFP");
 
     // Mirror every guest region (present and future) into this Unicorn instance.
     rt.mem().add_listener({

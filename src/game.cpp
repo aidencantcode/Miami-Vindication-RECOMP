@@ -2,20 +2,30 @@
 // step 2a (tools/probe/probe.py), driven by a real frame loop.
 //
 //   GLSurfaceView lifecycle on the phone       what we call here
-//   Gangster2.onCreate                         nativeSetPhone(800), nativeGetInfo(...)
+//   Gangster2.onCreate                         nativeSetPhone(width), nativeGetInfo(...)
 //   GameRenderer.onSurfaceCreated              nativeGetJNIEnv, GLResLoader/GLMediaPlayer init,
 //                                              Gangster2.nativeInit(isDemo), GameRenderer.nativeInit(1)
-//   GameRenderer.onSurfaceChanged              nativeResize(800, 480)
+//   GameRenderer.onSurfaceChanged              nativeResize(width, 480)
 //   first onDrawFrame                          Gangster2.nativeResume (queued focus-gained event)
-//   every onDrawFrame                          nativeRender, then swap
+//   every onDrawFrame                          nativeRender, then present + swap
+//   onPause / focus regained                   nativePause / nativeResume
+//
+// The game is told a 480-high screen whose width follows the window's aspect ratio (it lays
+// out correctly for any width at 480 high; taller sizes break its UI). It renders into a
+// virtual framebuffer at N x that size (gles1::vfb_*), which is scaled into the window.
 #include <SDL.h>
 #include <SDL_opengl.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <vector>
 #include <exception>
 #include <filesystem>
+#include <set>
+#include <sstream>
 #include <string>
+#include <thread>
 
 #include "core/layout.h"
 #include "core/log.h"
@@ -25,29 +35,77 @@
 #include "input/input.h"
 #include "jni/jni.h"
 #include "rt/runtime.h"
-
-#include <set>
-#include <sstream>
+#include "settings/settings.h"
 
 namespace fs = std::filesystem;
+using Clock = std::chrono::steady_clock;
+
+namespace {
+
+gles1::Fit fit_of(const std::string& s) {
+    return s == "stretch" ? gles1::Fit::Stretch : s == "integer" ? gles1::Fit::Integer : gles1::Fit::Aspect;
+}
+
+void apply_window_mode(SDL_Window* win, const settings::Settings& s) {
+    if (s.window_mode == "borderless") SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP);
+    else if (s.window_mode == "fullscreen") SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN);
+    else {
+        SDL_SetWindowFullscreen(win, 0);
+        SDL_SetWindowSize(win, s.window_w, s.window_h);
+        SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    }
+}
+
+}  // namespace
 
 int run_game(const rt::Paths& paths, const RunOptions& opt) {
-    constexpr int kW = 800, kH = 480;  // LG P990 panel, landscape
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) FATAL("SDL_Init: %s", SDL_GetError());
+    // ---- settings ------------------------------------------------------------------------------
+    const fs::path settings_file = paths.user / "settings.ini";
+    settings::Settings cfg;
+    if (!settings::load(settings_file, &cfg)) {
+        settings::save(settings_file, cfg);
+        LOG("settings: wrote defaults to %s", settings_file.string().c_str());
+    } else {
+        LOG("settings: loaded %s", settings_file.string().c_str());
+    }
+
+    // ---- window + GL ------------------------------------------------------------------------------
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) FATAL("SDL_Init: %s", SDL_GetError());
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
-    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
-    SDL_Window* win = SDL_CreateWindow("Gangstar: Miami Vindication (native)", SDL_WINDOWPOS_CENTERED,
-                                       SDL_WINDOWPOS_CENTERED, kW, kH, SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);  // the game renders into our own framebuffer
+    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
+    SDL_Window* win = SDL_CreateWindow("Gangstar: Miami Vindication", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                                       cfg.window_w, cfg.window_h,
+                                       SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN);
     if (!win) FATAL("SDL_CreateWindow: %s", SDL_GetError());
+    apply_window_mode(win, cfg);
     SDL_GLContext ctx = SDL_GL_CreateContext(win);
     if (!ctx) FATAL("SDL_GL_CreateContext: %s", SDL_GetError());
-    SDL_GL_SetSwapInterval(1);
+    SDL_GL_SetSwapInterval(cfg.vsync ? 1 : 0);
     if (!gles1::load_gl()) FATAL("required OpenGL entry points are missing");
     LOG("GL: %s / %s", glGetString(GL_RENDERER), glGetString(GL_VERSION));
 
+    int dw = 0, dh = 0;
+    SDL_GL_GetDrawableSize(win, &dw, &dh);
+    const int kW = opt.game_w > 0 ? opt.game_w : settings::logical_width(cfg, dw, dh);
+    const int kH = 480;
+    gles1::VfbConfig vc;
+    vc.logical_w = kW;
+    vc.logical_h = kH;
+    vc.scale = cfg.render_scale > 0 ? cfg.render_scale : settings::auto_render_scale(dh);
+    vc.msaa = cfg.msaa;
+    if (!gles1::vfb_init(vc)) {
+        LOG("GL: retrying the virtual framebuffer without MSAA");
+        vc.msaa = 0;
+        if (!gles1::vfb_init(vc)) FATAL("cannot create the virtual framebuffer");
+    }
+    jni::set_device_width(kW);
+    LOG("display: window %dx%d (%s), game %dx%d rendered at x%d, msaa %d", dw, dh, cfg.window_mode.c_str(), kW, kH,
+        vc.scale, vc.msaa);
+
+    // ---- runtime ----------------------------------------------------------------------------------
     rt::Runtime rt;
     std::string err;
     if (!rt.init(paths, &err)) FATAL("runtime init failed: %s", err.c_str());
@@ -55,8 +113,6 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     hle::register_libc_stdio(rt);
     gles1::register_handlers(rt);
     jni::install(rt);
-
-    // Imports that still have no host implementation (they log STUB: if ever called).
     {
         std::string missing;
         int n = 0;
@@ -70,12 +126,10 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     int rc = 0;
     int frame = 0;
     try {
-        // Static constructors (DT_INIT_ARRAY)
-        const uint32_t ia = rt.elf().dyn(25), ia_n = rt.elf().dyn(27) / 4;
-        auto t0 = std::chrono::steady_clock::now();
+        const uint32_t ia = rt.elf().dyn(25), ia_n = rt.elf().dyn(27) / 4;  // DT_INIT_ARRAY(SZ)
+        auto t0 = Clock::now();
         for (uint32_t i = 0; i < ia_n; ++i) cpu.call(rt.mem().r32(layout::kLibBase + ia + 4 * i));
-        LOG("%u static constructors ran (%.2f s)", ia_n,
-            std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+        LOG("%u static constructors ran (%.2f s)", ia_n, std::chrono::duration<double>(Clock::now() - t0).count());
 
         const uint32_t env = jni::env();
         const uint32_t c_g2 = jni::find_class(std::string(jni::kPkg) + "Gangster2");
@@ -85,13 +139,13 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
         const uint32_t renderer = jni::new_instance(std::string(jni::kPkg) + "GameRenderer");
         auto native = [&](const char* cls_method, std::initializer_list<uint32_t> args,
                           std::initializer_list<uint32_t> stack = {}) {
-            auto t = std::chrono::steady_clock::now();
+            auto t = Clock::now();
             uint64_t r = cpu.call(rt.lib_func(std::string("Java_com_gameloft_android_GAND_GloftGMHP_ML_") + cls_method), args, stack);
-            LOG("  ok  %s (%.2f s)", cls_method, std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count());
+            LOG("  ok  %s (%.2f s)", cls_method, std::chrono::duration<double>(Clock::now() - t).count());
             return uint32_t(r);
         };
 
-        native("Gangster2_nativeSetPhone", {env, c_g2, kW});
+        native("Gangster2_nativeSetPhone", {env, c_g2, uint32_t(kW)});
         native("Gangster2_nativeGetInfo", {env, c_g2, jni::new_string("US"), 0},
                {jni::new_string("LGE_LG-P990"), jni::new_string("2.2.2")});
         native("GameRenderer_nativeGetJNIEnv", {env, renderer});
@@ -102,58 +156,103 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
         native("GLMediaPlayer_nativeGetTotalSoundsOfSameInstance", {env, c_mp});
         native("Gangster2_nativeInit", {env, c_g2, uint32_t(opt.demo)});
         native("GameRenderer_nativeInit", {env, c_gr, 1});
-        native("GameRenderer_nativeResize", {env, c_gr, kW, kH});
+        native("GameRenderer_nativeResize", {env, c_gr, uint32_t(kW), uint32_t(kH)});
 
-        // Each run gets its own screenshot folder: build/shots/run_<unix time>/
+        // ---- frame loop ---------------------------------------------------------------------------
         const fs::path shot_dir = paths.root / "build" / "shots" /
                                   ("run_" + std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
                                                 std::chrono::system_clock::now().time_since_epoch()).count()));
-        if (opt.shot_every) {
-            fs::create_directories(shot_dir);
-            LOG("screenshots -> %s", shot_dir.string().c_str());
-        }
-        input::Input in;
-        in.init({&rt, env, jni::find_class(std::string(jni::kPkg) + "GameGLSurfaceView"), c_g2}, kW, kH);
-        if (!opt.input.empty()) {
-            std::string ierr;
-            if (!in.parse_script(opt.input, &ierr)) FATAL("%s", ierr.c_str());
-        }
         std::set<int> shots_at;
         {
             std::stringstream ss(opt.shots_at);
             std::string tok;
             while (std::getline(ss, tok, ',')) if (!tok.empty()) shots_at.insert(std::atoi(tok.c_str()));
         }
-        if (!shots_at.empty() && !opt.shot_every) {
+        if (opt.shot_every || !shots_at.empty()) {
             fs::create_directories(shot_dir);
             LOG("screenshots -> %s", shot_dir.string().c_str());
         }
 
-        bool running = true;
-        auto last_report = std::chrono::steady_clock::now();
+        input::Input in;
+        in.init({&rt, env, jni::find_class(std::string(jni::kPkg) + "GameGLSurfaceView"), c_g2}, kW, kH);
+        if (!opt.input.empty()) {
+            std::string ierr;
+            if (!in.parse_script(opt.input, &ierr)) FATAL("%s", ierr.c_str());
+        }
+
+        bool running = true, paused = false;
+        auto last_report = Clock::now(), frame_start = Clock::now();
         int frames_since = 0;
         for (; running && (opt.frames <= 0 || frame < opt.frames); ++frame) {
+            frame_start = Clock::now();
             SDL_Event ev;
             while (SDL_PollEvent(&ev)) {
-                if (ev.type == SDL_QUIT) running = false;
-                else in.handle(ev);
+                if (ev.type == SDL_QUIT) { running = false; continue; }
+                if (ev.type == SDL_KEYDOWN && !ev.key.repeat &&
+                    (ev.key.keysym.sym == SDLK_F11 ||
+                     (ev.key.keysym.sym == SDLK_RETURN && (ev.key.keysym.mod & KMOD_ALT)))) {
+                    bool fs_now = SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN;
+                    cfg.window_mode = fs_now ? "windowed" : "borderless";
+                    apply_window_mode(win, cfg);
+                    settings::save(settings_file, cfg);
+                    continue;
+                }
+                if (ev.type == SDL_WINDOWEVENT && cfg.pause_when_unfocused && frame > 0) {
+                    if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST && !paused) {
+                        native("Gangster2_nativePause", {env, c_g2});
+                        paused = true;
+                    } else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED && paused) {
+                        native("Gangster2_nativeResume", {env, c_g2});
+                        paused = false;
+                    }
+                }
+                in.handle(ev);
             }
             in.run_script(frame);
             if (frame == 0) native("Gangster2_nativeResume", {env, c_g2});
             cpu.call(rt.lib_func("Java_com_gameloft_android_GAND_GloftGMHP_ML_GameRenderer_nativeRender"), {env, c_gr});
+
+            // present the game image into the window
+            SDL_GL_GetDrawableSize(win, &dw, &dh);
+            int rx, ry, rw, rh;
+            gles1::vfb_present(dw, dh, fit_of(cfg.fit), cfg.smooth_scaling, &rx, &ry, &rw, &rh);
+            in.set_viewport(rx, ry, rw, rh);
             if ((opt.shot_every && (frame % opt.shot_every == 0 || frame == opt.frames - 1)) || shots_at.count(frame)) {
-                char path[64];
-                std::snprintf(path, sizeof path, "frame_%05d.bmp", frame);
-                gles1::screenshot((shot_dir / path).string().c_str(), kW, kH);
+                char name[64];
+                std::snprintf(name, sizeof name, "frame_%05d.bmp", frame);
+                gles1::screenshot((shot_dir / name).string().c_str(), dw, dh);
             }
             SDL_GL_SwapWindow(win);
+            gles1::vfb_restore_binding();
+
+            if (cfg.fps_limit > 0) {
+                auto target = frame_start + std::chrono::microseconds(1000000 / cfg.fps_limit);
+                std::this_thread::sleep_until(target);
+            }
             ++frames_since;
-            auto now = std::chrono::steady_clock::now();
-            double dt = std::chrono::duration<double>(now - last_report).count();
+            double dt = std::chrono::duration<double>(Clock::now() - last_report).count();
             if (dt >= 2.0) {
                 LOG("frame %d: %.1f fps, %llu draw calls total, heap %u KB", frame, frames_since / dt,
                     (unsigned long long)gles1::draw_calls(), (rt.brk() - layout::kSbrkBase) / 1024);
-                last_report = now;
+                if (opt.profile_traps) {
+                    // busiest import traps since the last report (per second)
+                    static std::vector<uint64_t> prev;
+                    const auto& now_counts = rt.call_counts();
+                    std::vector<std::pair<uint64_t, int>> d;
+                    uint64_t total = 0;
+                    for (size_t i = 0; i < now_counts.size(); ++i) {
+                        uint64_t delta = now_counts[i] - (i < prev.size() ? prev[i] : 0);
+                        total += delta;
+                        if (delta) d.push_back({delta, int(i)});
+                    }
+                    prev = now_counts;
+                    std::sort(d.rbegin(), d.rend());
+                    std::string top;
+                    for (size_t i = 0; i < d.size() && i < 10; ++i)
+                        top += rt.imports().trap_name(d[i].second) + "=" + std::to_string(uint64_t(d[i].first / dt)) + " ";
+                    LOG("  traps/s: %llu total; %s", (unsigned long long)(total / dt), top.c_str());
+                }
+                last_report = Clock::now();
                 frames_since = 0;
             }
         }

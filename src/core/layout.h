@@ -7,6 +7,7 @@ namespace layout {
 
 constexpr uint32_t kHandleBase = 0x0D000000;  // fake Java object handles: deliberately UNMAPPED
 constexpr uint32_t kTrapBase = 0x0E000000, kTrapSize = 0x00020000;  // 8-byte `svc #0; bx lr` stubs
+constexpr uint32_t kFastBase = 0x0E080000, kFastSize = 0x00010000;  // guest-side helpers (src/cpu/fastpath.S)
 constexpr uint32_t kDataBase = 0x0E100000, kDataSize = 0x00100000;  // bionic data objects, JNI tables
 constexpr uint32_t kLibBase = 0x10000000;                            // libGangster2.so
 constexpr uint32_t kHleHeapBase = 0x30000000, kHleHeapSize = 0x10000000;
