@@ -58,7 +58,8 @@ More run options (Phase 3): `--seconds S`, `--shots-at 650,t62.5` (frames or sec
 "<script>"`, `--fps N` (0 = unlimited), `--no-vsync`, `--game-size WxH`, `--quality
 phone|low|high|ultra`, `--touch-controls show|hide|auto`, `--dump-hud S` (log the HUD controls at S
 seconds), `--profile-traps` (busiest imports + hook calls every 2 s), `--profile-guest S` (guest
-instruction profile from S seconds), `--no-mods` (vanilla game, no hooks).
+instruction profile from S seconds), `--no-mods` (vanilla game, no hooks), `--set section.key=value`
+(override any settings.ini key for this run, repeatable), `--open-settings S` (open the F1 menu at S).
 **Input script** (`;`-separated, each `frame:cmd` or `t<seconds>:cmd`, at most one step per frame):
 `tap x y`, `down/move/up x y` (game pixels, e.g. 854×480), `key <android keycode>`,
 `pad <a|b|x|y|lb|rb|lt|rt|start|back|up|down|left|right> <0|1>`, `stick <l|r> <x> <y>` (−100..100).
@@ -376,8 +377,22 @@ PC = svc+4; writing PC (with the Thumb bit) from a hook redirects execution; nes
 - Guest profile (`--profile-guest`): ~55% of executed instructions are float-call overhead (helpers
   ~35%, PLT stubs ~20%); the rest is skinning, culling and Box2D. **120+ fps in gameplay needs the
   static recompiler (Phase 4)**; emulation won't get there.
-- Some game states (menus, title) run at ~128 fps uncapped. Whether the game has its own frame limiter
-  is open (Q20).
+- **Frame timing (Q20).** The game has **no frame cap and no fixed step**. Each frame
+  `Application::UpdateAfterMovie` takes `t = glitch timer getTime()`, which is integer ms from
+  `gettimeofday`. It computes `dt = t − last` (clamped to 100 ms), stores `last = t`, and calls
+  `Application::_Update(int dt_ms)`, which passes `(double)dt` to every registered `IUpdatable`,
+  the state machine and `MenuManager`. The absolute timestamp is stored, so game time never drifts at
+  any frame rate. The only effect of high fps is ±1 ms quantization per step: at 144 fps the steps go
+  7,7,7,6,... ms. Checked: the content warning lasts the same ~4.7 s at 60, 120, 144, 165, 240 and
+  ~530 fps. `gettimeofday` is now monotonic (a wall-clock jump would give a negative/huge step).
+  Optional sleeps in the loop (`glf::Thread::Sleep(global)`, `Sleep(66)` on some flag) hit our no-op
+  `usleep`. Still to check once gameplay can run at 120+ (Phase 4): per-frame (not dt-scaled)
+  logic and Box2D at small steps.
+- The menus/title ran ~128 fps uncapped only because of emulation speed. The warning screen does
+  ~530 fps uncapped.
+- **Frame limiter** (`game.cpp`): fixed-cadence deadlines with sleep + spin. Measured exactly
+  60.0/120.0/144.0/165.0/240.0 fps. `fps_limit = -1` follows the display refresh rate (the dev PC's
+  monitor is **100 Hz**).
 - Unicorn check (`hookbench.py` experiment): bounded `UC_HOOK_CODE` hooks cost nothing for code outside
   the hooked addresses. Function hooks are cheap (~500 calls/s in gameplay).
 
@@ -545,7 +560,7 @@ None of this applies to a PC port: we replace the whole Android/Java layer ourse
 | Q17 | How does weapon switching work? Types 7/8 (next/prev) never showed a visible button; the weapon selector is a HUD element at CHudManager+0xD0 | Ghidra on the WeaponSelector class + `--dump-hud` after picking up a second weapon |
 | Q18 | What are vehicle +0x3E8 and [vehicle+0x280]+0x448, which the tilt handler clears on every event? | Ghidra xrefs to those offsets in `Vehicle::` methods |
 | Q19 | Controller in the pause menu: Start/B send BACK, which opens the game's "quit to main menu?" dialog, and resuming needs the cursor on "< BACK". Map B/Start to that button? | Find the gameswf menu's back handler (RenderFX / `Widgets::`), or detect the pause menu and tap its BACK |
-| Q20 | Does the game cap its own frame rate (menus/title ran ~128 fps uncapped)? Is game timing frame-rate independent at 120-240 fps (physics, animation, Box2D steps)? | Ghidra on the main loop (`appRender`/`Application::Update` time step); measure game-time vs real-time at `--fps 30/60/144/240` |
+| Q20 | Does the game cap its own frame rate? Is game timing frame-rate independent at 120-240 fps? | **Mostly answered (§6c):** no cap, variable integer-ms step from an absolute timestamp, so no drift. Still open: per-frame (not dt-scaled) logic and Box2D behaviour at 4-8 ms steps. Check when the recompiled build runs gameplay at 120+ |
 | Q21 | Helicopters/planes: `FlyingControlHandler::handleAcceleration` also uses tilt. Needs the same virtual-steering treatment | Reach a flying section; replicate the driving hook |
 | Q22 | Ghidra marks `__aeabi_fsub` (and likely other EABI helpers) as non-returning, which truncates functions after the call (e.g. `handleAcceleration` shows 476 of 712 bytes) | Clear "no return" on the `__aeabi_*` thunks and re-run "fix function bodies" in the project (one-off, not `-readOnly`) |
 
@@ -626,5 +641,7 @@ None of this applies to a PC port: we replace the whole Android/Java layer ourse
 - Perf A/B lesson: the same spot measures 21 or 37 fps on different runs (random traffic/NPCs), so a
   suspected hook slowdown turned out to be scene variance. Compare runs of the same build only.
 - New open questions Q16-Q22; Q14 answered.
-- Next: FPS presets (120/144/165/240/unlimited) + check game timing at high fps (Q20); in-game
-  settings overlay (F1 / controller); audio (vox thread + GLMediaPlayer); saves; draw-distance A/B.
+- Later the same day: settings overlay (ImGui), FPS presets with exact pacing, frame-timing analysis
+  (Q20 mostly answered), anisotropic filtering, monotonic gettimeofday, `--set` overrides.
+- Next: audio (vox thread + GLMediaPlayer, Q11/Q13), saves, draw-distance A/B; then the remaining
+  input questions (Q16, Q17, Q19, Q21).

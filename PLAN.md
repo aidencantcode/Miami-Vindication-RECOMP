@@ -176,12 +176,11 @@ Each step is small, committed separately, and verified with screenshots + the ru
 - ✅ **Keyboard + controller** → virtual touches on the live HUD; menu cursor; tilt steering for
   pads/keys; touch controls hide automatically while a pad/keyboard drives (`touch_controls`).
   Open: Q16 (other steering modes), Q17 (weapon switch), Q19 (pause-menu resume), Q21 (flying).
-- ⬜ **FPS modes.** Presets 30/60/120/144/165/240/unlimited in settings + overlay. The limiter is
-  already precise (sleep + spin). Check that game timing is frame-rate independent at high fps (Q20).
-  Under emulation, gameplay can't reach 120 (CPU-bound). That comes with Phase 4, but the setting,
-  the pacing and the timing checks belong here, so the recompiled build only has to be faster.
-- ⬜ **Settings overlay** (F1 / controller Back+Start): display, graphics, controls, FPS; writes
-  `settings.ini`. Candidate: Dear ImGui (MIT) on the GL bridge's overlay pass.
+- ✅ **FPS modes.** Presets: display refresh (default), 30/60/90/120/144/165/240/360, unlimited.
+  Exact pacing measured. Game timing is frame-rate independent (Q20, §6c). Under emulation, gameplay
+  can't reach 120 (CPU-bound, ~20-40 fps). That comes with Phase 4, which only has to be faster.
+- ✅ **Settings overlay** (Dear ImGui; F1, controller Guide or L3+R3): display, graphics, controls, game;
+  live-applies what it can, marks restart-only options, saves `settings.ini`. FPS counter, toasts.
 - ⬜ **3b Threads.** Run `vox::funcUpdate` on a host thread with its own Unicorn instance; real
   mutexes/condition variables/TLS in the pthread HLE (Q13). ✔ when the vox thread runs alongside the
   render thread for minutes without deadlocks or faults.
