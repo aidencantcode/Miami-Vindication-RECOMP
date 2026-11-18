@@ -16,6 +16,7 @@ import ctypes
 import functools
 import math
 import os
+import posixpath
 import re
 import struct
 import time
@@ -578,6 +579,122 @@ def cformat(e, fmt, args):
     return bytes(out)
 
 
+_SCAN_CONV = re.compile(rb"%(\*?)(\d*)(hh|h|ll|l|L|q|j|z|t)?([diouxXeEfFgGaAscpn%]|\[\^?\]?[^\]]*\])")
+_SCAN_FLT = re.compile(rb"[+-]?(?:inf(?:inity)?|nan|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)", re.I)
+
+
+def csscanf(e, s, fmt, args):
+    """C sscanf over bytes. Returns the number of assignments, or -1 (EOF) if the
+    input ran out before the first conversion."""
+    si, fi, assigned, converted_any = 0, 0, 0, False
+    while fi < len(fmt):
+        fc = fmt[fi]
+        if fc in b" \t\n\v\f\r":
+            while si < len(s) and s[si] in b" \t\n\v\f\r":
+                si += 1
+            fi += 1
+            continue
+        if fc != 0x25:  # literal
+            if si < len(s) and s[si] == fc:
+                si, fi = si + 1, fi + 1
+                continue
+            break
+        m = _SCAN_CONV.match(fmt, fi)
+        if not m:
+            break
+        fi = m.end()
+        suppress, width, length, conv = m.group(1) == b"*", int(m.group(2) or 0), m.group(3), m.group(4)
+        if conv == b"%":
+            while si < len(s) and s[si] in b" \t\n\v\f\r":
+                si += 1
+            if si < len(s) and s[si] == 0x25:
+                si += 1
+                continue
+            break
+        if conv == b"n":
+            if not suppress:
+                e.w32(args.u32(), si)
+            continue
+        if conv not in (b"c",) and not conv.startswith(b"["):
+            while si < len(s) and s[si] in b" \t\n\v\f\r":
+                si += 1
+        if si >= len(s):
+            return assigned if converted_any else u32(-1)
+        lim = len(s) if not width else min(len(s), si + width)
+        chunk = s[si:lim]
+        c = conv.decode()
+        if c in "diuoxXp":
+            base = {"d": 10, "u": 10, "i": 0, "o": 8, "x": 16, "X": 16, "p": 16}[c]
+            val, used = _strtoi(chunk, base)
+            if used == 0:
+                break
+            si += used
+            if not suppress:
+                ptr = args.u32()
+                size = 8 if length in (b"ll", b"q", b"j") else 2 if length == b"h" else 1 if length == b"hh" else 4
+                e.write(ptr, (val & ((1 << (8 * size)) - 1)).to_bytes(size, "little"))
+                assigned += 1
+        elif c in "eEfFgGaA":
+            mm = _SCAN_FLT.match(chunk)
+            if not mm:
+                break
+            si += mm.end()
+            if not suppress:
+                ptr = args.u32()
+                v = float(mm.group(0).decode("ascii"))
+                e.write(ptr, struct.pack("<d", v) if length in (b"l", b"L") else struct.pack("<f", ctypes.c_float(v).value))
+                assigned += 1
+        elif c == "s":
+            j = 0
+            while j < len(chunk) and chunk[j] not in b" \t\n\v\f\r":
+                j += 1
+            if j == 0:
+                break
+            si += j
+            if not suppress:
+                e.write(args.u32(), chunk[:j] + b"\0")
+                assigned += 1
+        elif c == "c":
+            n = width or 1
+            if len(s) - si < n:
+                break
+            if not suppress:
+                e.write(args.u32(), s[si:si + n])
+                assigned += 1
+            si += n
+        else:  # scanset %[...]
+            body = conv[1:-1]
+            neg = body.startswith(b"^")
+            if neg:
+                body = body[1:]
+            allowed = set()
+            k = 0
+            while k < len(body):
+                if k + 2 < len(body) and body[k + 1] == 0x2D:
+                    allowed.update(range(body[k], body[k + 2] + 1))
+                    k += 3
+                else:
+                    allowed.add(body[k])
+                    k += 1
+            j = 0
+            while j < len(chunk) and ((chunk[j] in allowed) != neg):
+                j += 1
+            if j == 0:
+                break
+            si += j
+            if not suppress:
+                e.write(args.u32(), chunk[:j] + b"\0")
+                assigned += 1
+        converted_any = True
+    return assigned
+
+
+@hle("sscanf")
+def _sscanf(e, n, a):
+    s, fmt = e.cstr(a.u32()), e.cstr(a.u32())
+    return csscanf(e, s, fmt, a)
+
+
 def _emit(e, stream, data):
     text = data.decode("utf-8", "replace").rstrip("\n")
     if text:
@@ -679,10 +796,20 @@ class FS:
     def __init__(self, data_dir, sandbox):
         self.data_dir, self.sandbox = data_dir, sandbox
         self.index = {f.lower(): f for f in os.listdir(data_dir)} if data_dir and os.path.isdir(data_dir) else {}
+        self.cwd = "/"  # an Android app process starts in "/"
+
+    def normalize(self, guest):
+        """Absolute, normalized guest path: relative paths resolve against cwd,
+        '//' and '/./' collapse, '..' is resolved."""
+        g = guest.replace("\\", "/")
+        if not g.startswith("/"):
+            g = posixpath.join(self.cwd, g)
+        g = posixpath.normpath(re.sub(r"/+", "/", g))
+        return "/" + g.lstrip("/")
 
     def map(self, guest):
         """-> (readonly_host_path or None, sandbox_host_path)"""
-        g = guest.replace("\\", "/")
+        g = self.normalize(guest)
         low = g.lower()
         for pre in self.PREFIXES:
             if low == pre or low.startswith(pre + "/"):
@@ -1027,7 +1154,9 @@ def _remove(e, n, a):
 
 @hle("chdir")
 def _chdir(e, n, a):
-    fs_log(e, f"chdir({e.cstr(a.u32())!r}) -> 0 (ignored)")
+    path = e.cstr(a.u32()).decode("latin1")
+    e.fs.cwd = e.fs.normalize(path)
+    fs_log(e, f"chdir({path!r}) -> 0 (cwd now {e.fs.cwd})")
     return 0
 
 

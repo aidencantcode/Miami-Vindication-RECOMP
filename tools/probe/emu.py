@@ -5,7 +5,7 @@ Address map (32-bit guest):
   0x0E000000  trap stubs, 8 bytes each: ARM `svc #0 ; bx lr`
   0x0E100000  bionic data objects + JNI tables
   0x10000000  libGangster2.so image
-  0x30000000  HLE heap (our own allocations: JNI copies, FILE structs, ...)
+  0x30000000  HLE heap, 256 MB bump allocator (JNI copies, FILE structs, GL buffers, ...)
   0x40000000  sbrk heap (the game's own malloc grows this)
   0x60000000  mmap area
   0x7F000000  stack (16 MB, grows down from 0x80000000)
@@ -31,7 +31,7 @@ HANDLE_BASE = 0x0D000000
 TRAP_BASE, TRAP_SIZE = 0x0E000000, 0x00020000
 DATA_BASE, DATA_SIZE = 0x0E100000, 0x00100000
 LIB_BASE = 0x10000000
-HLE_HEAP_BASE, HLE_HEAP_SIZE = 0x30000000, 0x04000000
+HLE_HEAP_BASE, HLE_HEAP_SIZE = 0x30000000, 0x10000000
 SBRK_BASE, SBRK_LIMIT = 0x40000000, 0x58000000
 MMAP_BASE, MMAP_LIMIT = 0x60000000, 0x70000000
 STACK_BASE, STACK_SIZE = 0x7F000000, 0x01000000

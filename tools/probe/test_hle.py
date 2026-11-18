@@ -83,5 +83,43 @@ got = L.cformat(emu, emu.cstr(0x200),
                 FakeArgs(-5, 3.14159, 0x100, 255, ord("A"), 2.5, 2**40, 0xFFFFFFFF, 0, 0x1234, 0x100, -42))
 eq(got, b"-5| 3.14|hello|ff|A  |0002.500|1099511627776|4294967295|%|0|0x1234|he|-0042", "cformat mix")
 
+# sscanf
+class MemEmu:
+    def __init__(self):
+        self.mem = {}
+
+    def write(self, a, data):
+        self.mem[a] = bytes(data)
+
+    def w32(self, a, v):
+        self.mem[a] = struct.pack("<I", v & 0xFFFFFFFF)
+
+
+def scan(s, fmt, nptr):
+    m = MemEmu()
+    ptrs = [0x1000 * (i + 1) for i in range(nptr)]
+    r = L.csscanf(m, s, fmt, FakeArgs(*ptrs))
+    return L.s32(r), [m.mem.get(p) for p in ptrs]
+
+
+r, v = scan(b"1.1", b"%d.%d", 2)
+eq((r, struct.unpack("<i", v[0])[0], struct.unpack("<i", v[1])[0]), (2, 1, 1), "sscanf('1.1', '%d.%d')  (GL version parse)")
+r, v = scan(b"  42 abc 3.5", b"%d %s %f", 3)
+eq((r, struct.unpack("<i", v[0])[0], v[1], round(struct.unpack("<f", v[2])[0], 3)), (3, 42, b"abc\0", 3.5), "sscanf mixed %d %s %f")
+r, v = scan(b"x=10,y=0x1f", b"x=%d,y=%x", 2)
+eq((r, struct.unpack("<i", v[0])[0], struct.unpack("<i", v[1])[0]), (2, 10, 31), "sscanf literals + hex")
+eq(scan(b"", b"%d", 1)[0], -1, "sscanf on empty input = EOF (-1)")
+eq(scan(b"abc", b"%d", 1)[0], 0, "sscanf no match = 0")
+r, v = scan(b"ab12", b"%[a-z]%n", 2)
+eq((r, v[0], struct.unpack("<I", v[1])[0]), (1, b"ab\0", 2), "sscanf scanset + %n")
+r, v = scan(b"2.50", b"%lf", 1)
+eq((r, struct.unpack("<d", v[0])[0]), (1, 2.5), "sscanf %lf writes a double")
+
+# path normalisation (Android process cwd is '/')
+fs = L.FS(None, "sandbox")
+for g, want in (("./sdcard/gameloft/games/Gangstar2//./about.english", "/sdcard/gameloft/games/Gangstar2/about.english"),
+                ("/sdcard//a/../b.txt", "/sdcard/b.txt"), ("rel.txt", "/rel.txt")):
+    eq(fs.normalize(g), want, f"normalize({g!r})")
+
 print("ALL OK" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

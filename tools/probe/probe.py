@@ -407,6 +407,224 @@ def step_1c(args):
     return rep.save("first JNI calls with a fake JNIEnv")
 
 
+def step_2a(args):
+    """Headless full boot: the rest of startup + N frames with a recording fake GL."""
+    import jni as J
+    import gl as G
+    rep = Report("2a")
+    emu, _ = build(args.so, rep, install_hle=True)
+    emu.screen = (800, 480)                     # LG P990 panel, landscape
+    fj = J.FakeJNI(emu)
+    fg = G.FakeGL(emu)
+    w = watch_ctype(emu) if not args.no_watch else None
+
+    ext_needles = collections.Counter()
+    real_strstr = emu.handlers["strstr"]
+
+    def strstr_spy(e, n, a):
+        if a.regs[0] and a.regs[0] == fg.strings.get(G.GL_EXTENSIONS):
+            ext_needles[e.cstr(a.regs[1]).decode("latin1")] += 1
+        return real_strstr(e, n, a)
+    emu.handlers["strstr"] = strstr_spy
+
+    done, _ = run_constructors(emu, rep)
+    rep.md("## Checks")
+    rep.md("")
+    rep.check(done == 448, f"static constructors: {done}/448 returned")
+
+    env = fj.env
+    cls = {k: fj.cls(J.PKG + k) for k in ("Gangster2", "GameRenderer", "GLMediaPlayer", "GLResLoader",
+                                          "GameGLSurfaceView")}
+    renderer = fj.instance(J.PKG + "GameRenderer")
+
+    def native(c, m, *a, **kw):
+        return emu.call(emu.func(f"Java_com_gameloft_android_GAND_GloftGMHP_ML_{c}_{m}"), *a, **kw)[0]
+
+    def jstr(s):
+        return fj.new(J.JObj("string", "java/lang/String", s)) if s is not None else 0
+
+    timeline = []
+
+    def step(label, fn):
+        """label ending in '()' or containing '() ' returns a value worth showing; void calls don't."""
+        t0 = time.time()
+        r = fn()
+        shown = r if ("Get" in label or "get" in label) and "nativeGetJNIEnv" not in label and "nativeGetInfo" not in label else None
+        timeline.append((label, time.time() - t0, shown))
+        rep.log(f"  ok  {label}" + (f" -> {s32(shown)}" if shown is not None else "") + f"  ({time.time() - t0:.2f} s)")
+        return r
+
+    boot_ok = False
+    n_sounds = None
+    try:
+        # Gangster2.onCreate (UI thread)
+        step("Gangster2.nativeSetPhone(800)", lambda: native("Gangster2", "nativeSetPhone", env, cls["Gangster2"], 800))
+        step("Gangster2.nativeGetInfo(...)", lambda: native("Gangster2", "nativeGetInfo", env, cls["Gangster2"],
+                                                              jstr("US"), 0, stack_args=(jstr("LGE_LG-P990"), jstr("2.2.2"))))
+        # GameRenderer.onSurfaceCreated (GL thread)
+        step("GameRenderer.nativeGetJNIEnv()", lambda: native("GameRenderer", "nativeGetJNIEnv", env, renderer))
+        step("GLResLoader.nativeInit(0)", lambda: native("GLResLoader", "nativeInit", env, cls["GLResLoader"], 0))
+        step("GLMediaPlayer.nativeInit(0)", lambda: native("GLMediaPlayer", "nativeInit", env, cls["GLMediaPlayer"], 0))
+        n_sounds = s32(step("GLMediaPlayer.nativeGetTotalSounds()",
+                            lambda: native("GLMediaPlayer", "nativeGetTotalSounds", env, cls["GLMediaPlayer"])))
+        step("GLMediaPlayer.nativeGetTotalSoundsOfSameInstance()",
+             lambda: native("GLMediaPlayer", "nativeGetTotalSoundsOfSameInstance", env, cls["GLMediaPlayer"]))
+        step(f"Gangster2.nativeInit(isDemo={args.demo})",
+             lambda: native("Gangster2", "nativeInit", env, cls["Gangster2"], args.demo))
+        step("GameRenderer.nativeInit(1)", lambda: native("GameRenderer", "nativeInit", env, cls["GameRenderer"], 1))
+        # onSurfaceChanged
+        step("GameRenderer.nativeResize(800, 480)",
+             lambda: native("GameRenderer", "nativeResize", env, cls["GameRenderer"], 800, 480))
+        boot_ok = True
+    except (E.ProbeError, E.GuestExit) as exc:
+        rep.log(f"boot stopped after {timeline[-1][0] if timeline else 'start'}:\n{exc}")
+    rep.check(boot_ok, "startup sequence onCreate → onSurfaceCreated → onSurfaceChanged returned: "
+              + " → ".join(t[0] for t in timeline))
+
+    frames_ok = 0
+    frame_times = []
+    if boot_ok:
+        try:
+            for i in range(args.frames):
+                fg.begin_frame(i)
+                t0 = time.time()
+                if i == 0:  # first onDrawFrame processes the queued focus-gained event
+                    native("Gangster2", "nativeResume", env, cls["Gangster2"])
+                native("GameRenderer", "nativeRender", env, cls["GameRenderer"])
+                frame_times.append(time.time() - t0)
+                frames_ok += 1
+                if i % 10 == 0 or i == args.frames - 1:
+                    rep.log(f"  frame {i}: {frame_times[-1]:.2f} s, draws={fg.draws[i]}, clears={fg.clears[i]}, "
+                            f"files open so far={len(emu.fs_events)}")
+        except (E.ProbeError, E.GuestExit) as exc:
+            rep.log(f"frame {frames_ok} stopped:\n{exc}")
+    rep.check(frames_ok == args.frames, f"{frames_ok}/{args.frames} nativeRender() frames returned"
+              + (f" (avg {sum(frame_times) / len(frame_times):.2f} s/frame emulated)" if frame_times else ""))
+
+    # FileManager now exists? Then the native sound table can be compared index by index.
+    java_names = java_sound_table()
+    native_names = []
+    if boot_ok and n_sounds and n_sounds > 0:
+        try:
+            for i in range(n_sounds):
+                h = native("GLMediaPlayer", "nativeGetSoundFileName", env, cls["GLMediaPlayer"], i)
+                native_names.append(fj.str_of(h) if h else None)
+        except (E.ProbeError, E.GuestExit) as exc:
+            first = str(exc).splitlines()
+            rep.log("nativeGetSoundFileName still fails: " + (first[1] if len(first) > 1 else first[0]))
+    if native_names and java_names:
+        def stem(x):
+            return os.path.splitext(os.path.basename(x))[0].lower()
+        same = sum(1 for i, x in enumerate(native_names) if x is not None and stem(x) == stem(java_names[i]))
+        readable = sum(1 for x in native_names if x)
+        rep.check(readable == n_sounds,
+                  f"native sound table readable after boot (FileManager exists, Q12): {readable}/{n_sounds} names")
+        rep.md(f"    - finding, not a pass/fail: {same}/{len(native_names)} slots have the same stem as Java's "
+               f"independently hard-coded table (strong evidence the emulation is right); the rest are data-naming "
+               f"differences, see below and analysis/raw/probe_2a_sounds.tsv")
+        n_ext = collections.Counter(os.path.splitext(x)[1].lower() for x in native_names if x)
+        j_ext = collections.Counter(os.path.splitext(x)[1].lower() for x in java_names)
+        rep.md(f"    - extensions: native {dict(n_ext)} vs Java {dict(j_ext)} (native keeps the original "
+               f"asset names; Java plays the Ogg conversions)")
+        diffs = [(i, x, java_names[i]) for i, x in enumerate(native_names) if x is None or stem(x) != stem(java_names[i])]
+        data_stems = {os.path.splitext(f)[0].lower() for f in os.listdir(args.data) if f.lower().endswith(".ogg")}
+        java_ok = sum(1 for j in java_names[:len(native_names)] if stem(j) in data_stems)
+        either_ok = sum(1 for i, x in enumerate(native_names)
+                        if stem(java_names[i]) in data_stems or (x and stem(x) in data_stems))
+        kinds = collections.Counter()
+        for i, x, j in diffs:
+            kinds[("native" if x and stem(x) in data_stems else "") + ("+" if x and stem(x) in data_stems and stem(j) in data_stems else "")
+                  + ("Java" if stem(j) in data_stems else "") or "neither"] += 1
+        rep.md(f"    - the {len(diffs)} differing slots: which name exists as .ogg in the data folder? "
+               + ", ".join(f"{k}: {v}" for k, v in kinds.most_common()))
+        rep.md(f"    - playable slots (of {len(native_names)}): using Java's names (what the phone did) "
+               f"{java_ok}; using whichever of the two names exists {either_ok}")
+        for i, x, j in diffs[:8]:
+            rep.md(f"    - e.g. [{i}] native {x!r} vs Java {j!r}")
+        with open(os.path.join(ROOT, "analysis", "raw", "probe_2a_sounds.tsv"), "w", encoding="utf-8") as fh:
+            fh.write("index\tnative\tjava\tnative_in_data\tjava_in_data\n")
+            for i, x in enumerate(native_names):
+                fh.write(f"{i}\t{x}\t{java_names[i]}\t{int(bool(x) and stem(x) in data_stems)}\t{int(stem(java_names[i]) in data_stems)}\n")
+    else:
+        rep.check(False, f"native sound names readable after boot ({len(native_names)} read)")
+    rep.check(not emu.stubbed, f"libc imports hit that are still plain stubs: {', '.join(sorted(emu.stubbed)) or 'none'}")
+
+    # ---- report ---------------------------------------------------------------------
+    rep.md("")
+    rep.md("## Timeline")
+    rep.md("")
+    for label, dt, r in timeline:
+        rep.md(f"- {label}" + (f" → {s32(r)}" if isinstance(r, int) else "") + f" ({dt:.2f} s)")
+    if frame_times:
+        rep.md(f"- nativeRender × {len(frame_times)}: first {frame_times[0]:.2f} s, "
+               f"slowest {max(frame_times):.2f} s, last {frame_times[-1]:.2f} s")
+    rep.md("")
+    rep.md("## Files the game touched")
+    rep.md("")
+    opened = collections.Counter(ev for ev in emu.fs_events)
+    rep.md(f"{len(emu.fs_events)} file-system events, {len(opened)} distinct.")
+    rep.md("")
+    for ev, c in list(opened.items())[:150]:
+        rep.md(f"- {ev}" + (f" ×{c}" if c > 1 else ""))
+    if len(opened) > 150:
+        rep.md(f"- … {len(opened) - 150} more in analysis/raw/probe_2a.log")
+    rep.md("")
+    rep.md("## JNI functions used (closes Q1)")
+    rep.md("")
+    rep.md(", ".join(f"`{t.split('::')[1]}`×{fj.trace[t]}" for t in fj.trace_order))
+    rep.md("")
+    rep.md("## Java callbacks invoked")
+    rep.md("")
+    for (c, m, s), k in fj.java_calls.most_common():
+        rep.md(f"- `{c}.{m}{s}` × {k}")
+    if not fj.java_calls:
+        rep.md("- none")
+    unknown = [l for l in fj.lookups if l[4] is False]
+    rep.md("")
+    rep.md(f"Method/field lookups: {len(fj.lookups)} total, {len(unknown)} not found in the decompiled Java"
+           + (": " + ", ".join(f"`{l[1].replace(J.PKG, '')}.{l[2]}{l[3]}`" for l in unknown) if unknown else "."))
+    rep.md("")
+    rep.md("## OpenGL ES usage")
+    rep.md("")
+    rep.md(f"{sum(fg.calls.values()):,} GL calls, {len(fg.calls)} distinct functions "
+           f"(of {sum(1 for i in emu.lib.imports if i.name.startswith('gl'))} imported):")
+    rep.md("")
+    rep.md(", ".join(f"`{k}`×{v:,}" for k, v in fg.calls.most_common()))
+    never = sorted(i.name for i in emu.lib.imports if i.name.startswith("gl") and i.name not in fg.calls)
+    rep.md("")
+    rep.md(f"Imported but not called yet: {', '.join(f'`{x}`' for x in never) or 'none'}")
+    rep.md("")
+    rep.md(f"- textures: {sum(fg.ids[k] for k in ('Textures',))} names generated; uploads by format: "
+           + ", ".join(f"{k}×{v}" for k, v in fg.uploads.most_common()))
+    rep.md(f"- compressed texture bytes uploaded: {fg.compressed_bytes:,}")
+    rep.md(f"- buffers {fg.ids['Buffers']}, framebuffers {fg.ids['Framebuffers']}, renderbuffers {fg.ids['Renderbuffers']}")
+    if fg.draws:
+        last = max(fg.draws)
+        rep.md(f"- draw calls per frame: " + ", ".join(f"f{i}={fg.draws[i]}" for i in sorted(fg.draws)[-10:]))
+    rep.md(f"- extension checks (strstr on GL_EXTENSIONS): "
+           + (", ".join(f"`{k}`" for k in ext_needles) if ext_needles else "none"))
+    if fg.unknown_queries:
+        rep.md("- queries answered with a default (check these): "
+               + ", ".join(f"{k}×{v}" for k, v in fg.unknown_queries.most_common()))
+    rep.md("")
+    rep.md("## Runtime resources")
+    rep.md("")
+    rep.md(f"- game heap via sbrk: {emu.brk - E.SBRK_BASE:,} bytes ({emu.sbrk_calls} calls)")
+    rep.md(f"- HLE heap used: {emu._heap_next - E.HLE_HEAP_BASE:,} bytes")
+    rep.md(f"- threads requested: {len(emu.threads)}"
+           + "".join(f"\n    - start={emu.where(s)} arg={a:#x}" for s, a in emu.threads))
+    rep.md(f"- libc imports used: {len([n for n in emu.call_order if not n.startswith(('JNI::', 'JVM::')) and not n.startswith('gl')])}"
+           f" of {len(emu.lib.imports) - sum(1 for i in emu.lib.imports if i.name.startswith('gl'))} non-GL imports")
+    if w is not None:
+        rep.md("")
+        rep.md("## bionic ctype layout check (Q10)")
+        rep.md("")
+        for line in ctype_findings(emu, w):
+            rep.md(f"- {line}")
+            rep.log(line)
+    return rep.save("headless full boot with a recording fake GL")
+
+
 def s32(v):
     return v - (1 << 32) if v & 0x80000000 else v
 
@@ -424,11 +642,16 @@ def java_sound_table():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("step", choices=["1a", "1b", "1c"])
+    ap.add_argument("step", choices=["1a", "1b", "1c", "2a"])
     ap.add_argument("--so", default=DEFAULT_SO)
     ap.add_argument("--data", default=DEFAULT_DATA)
+    ap.add_argument("--frames", type=int, default=60, help="2a: nativeRender calls")
+    ap.add_argument("--demo", type=int, default=1,
+                    help="2a: Gangster2.nativeInit arg. 1 = what Java passes on a fresh install "
+                         "(playMode pref defaults to 0 -> isDemo() true)")
+    ap.add_argument("--no-watch", action="store_true", help="2a: skip the ctype memory watches (faster)")
     args = ap.parse_args()
-    fn = {"1a": step_1a, "1b": step_1b, "1c": step_1c}.get(args.step)
+    fn = {"1a": step_1a, "1b": step_1b, "1c": step_1c, "2a": step_2a}.get(args.step)
     if fn is None:
         print(f"step {args.step} not implemented yet")
         return 2
