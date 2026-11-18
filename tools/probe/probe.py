@@ -182,13 +182,101 @@ def step_1a(args):
     return rep.save("load + relocate libGangster2.so")
 
 
+def watch_ctype(emu):
+    w = {}
+    for name in ("_ctype_", "_tolower_tab_", "_toupper_tab_"):
+        w[name] = emu.watch(name, emu.data[name], 4)
+        w[name + "#table"] = emu.watch(name + "#table", emu.data[name + "#table"], 257 * 2)
+    return w
+
+
+def ctype_findings(emu, w):
+    out = []
+    for name in ("_ctype_", "_tolower_tab_", "_toupper_tab_"):
+        p, t = w[name], w[name + "#table"]
+        if not p and not t:
+            out.append(f"`{name}`: not read yet")
+            continue
+        ptr_ok = all(off == 0 and sz == 4 for off, sz, _ in p)
+        out.append(f"`{name}`: {len(p)} reads of the 4-byte pointer object "
+                   f"({'all aligned 32-bit loads' if ptr_ok else 'UNEXPECTED access pattern'}), "
+                   f"{len(t)} reads of the table it points to"
+                   + (f"; first reader {emu.where(p[0][2])}" if p else ""))
+    return out
+
+
+def run_constructors(emu, rep):
+    ia = emu.lib.init_array()
+    per = []
+    for i, f in enumerate(ia):
+        before = collections.Counter(emu.calls)
+        try:
+            emu.call(f)
+        except (E.ProbeError, E.GuestExit) as exc:
+            rep.log(f"constructor #{i} at {emu.where(f)} FAILED:\n{exc}")
+            return i, per
+        delta = collections.Counter(emu.calls)
+        delta.subtract(before)
+        per.append((i, f, +delta))
+    return len(ia), per
+
+
+def step_1b(args):
+    rep = Report("1b")
+    emu, _ = build(args.so, rep, install_hle=True)
+    w = watch_ctype(emu)
+    t0 = time.time()
+    done, per = run_constructors(emu, rep)
+    dt = time.time() - t0
+    total = len(emu.lib.init_array())
+    rep.md("## Checks")
+    rep.md("")
+    rep.check(done == total == 448, f"{done}/{total} DT_INIT_ARRAY constructors ran and returned ({dt:.1f} s)")
+    rep.check(not emu.threads, f"no threads started during static init ({len(emu.threads)})")
+    stubbed = sorted(emu.stubbed)
+    rep.check(True, f"imports hit that are still plain stubs: {', '.join(stubbed) if stubbed else 'none'}")
+
+    rep.md("")
+    rep.md("## What static initialisation does")
+    rep.md("")
+    used = [(n, emu.calls[n]) for n in emu.call_order]
+    rep.md(f"- constructors that call any import: {sum(1 for _, _, d in per if d)} of {done}")
+    rep.md(f"- sbrk heap in use afterwards: {emu.brk - E.SBRK_BASE:,} bytes ({emu.sbrk_calls} sbrk calls)")
+    rep.md(f"- destructors registered via `__aeabi_atexit`: {len(emu.atexit)}")
+    rep.md(f"- file-system events: {len(emu.fs_events)}")
+    for ev in emu.fs_events[:20]:
+        rep.md(f"    - {ev}")
+    rep.md("")
+    rep.md("### Imports called (first-use order)")
+    rep.md("")
+    rep.md("| import | calls | handled by |")
+    rep.md("|---|---:|---|")
+    for n, c in used:
+        rep.md(f"| `{n}` | {c:,} | {'STUB' if n in emu.stubbed else 'HLE'} |")
+    rep.md("")
+    rep.md("### Heaviest constructors (by import calls)")
+    rep.md("")
+    for i, f, d in sorted(per, key=lambda x: -sum(x[2].values()))[:10]:
+        if d:
+            top = ", ".join(f"{k}×{v}" for k, v in d.most_common(4))
+            rep.md(f"- #{i} `{emu.where(f)}`: {sum(d.values()):,} calls ({top})")
+    rep.md("")
+    rep.md("### bionic ctype layout check")
+    rep.md("")
+    for line in ctype_findings(emu, w):
+        rep.md(f"- {line}")
+    for line in ctype_findings(emu, w):
+        rep.log(line)
+    return rep.save("run the 448 static constructors")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("step", choices=["1a", "1b", "1c"])
     ap.add_argument("--so", default=DEFAULT_SO)
     ap.add_argument("--data", default=DEFAULT_DATA)
     args = ap.parse_args()
-    fn = {"1a": step_1a}.get(args.step)
+    fn = {"1a": step_1a, "1b": step_1b}.get(args.step)
     if fn is None:
         print(f"step {args.step} not implemented yet")
         return 2
