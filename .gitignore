@@ -1,0 +1,26 @@
+# --- Owner's game files: never commit -------------------------------------
+original/
+work/
+
+# Game binaries / packages anywhere in the tree
+*.so
+*.apk
+*.obb
+*.dex
+*.odex
+
+# --- Derived from Gameloft's code: keep local only -------------------------
+# Decompiled Java (jadx) and full disassembly / Ghidra projects are not our
+# code. Small derived facts (import/export lists, notes) ARE committed.
+analysis/jadx/
+analysis/ghidra/
+analysis/*.disasm.txt
+analysis/raw/
+
+# --- Build / tooling output --------------------------------------------------
+build/
+out/
+__pycache__/
+*.pyc
+.vscode/
+*.log
