@@ -89,6 +89,8 @@ int main(int argc, char** argv) {
         if (!std::strcmp(argv[i], "--frames")) frames = opt.frames = std::atoi(argv[i + 1]);
         if (!std::strcmp(argv[i], "--shot-every")) opt.shot_every = std::atoi(argv[i + 1]);
         if (!std::strcmp(argv[i], "--demo")) opt.demo = std::atoi(argv[i + 1]);
+        if (!std::strcmp(argv[i], "--input")) opt.input = argv[i + 1];
+        if (!std::strcmp(argv[i], "--shots-at")) opt.shots_at = argv[i + 1];
     }
 
     int rc = 0;

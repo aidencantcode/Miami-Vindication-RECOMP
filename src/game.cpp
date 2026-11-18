@@ -22,8 +22,12 @@
 #include "game.h"
 #include "gl/gles1.h"
 #include "hle/hle.h"
+#include "input/input.h"
 #include "jni/jni.h"
 #include "rt/runtime.h"
+
+#include <set>
+#include <sstream>
 
 namespace fs = std::filesystem;
 
@@ -108,16 +112,36 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
             fs::create_directories(shot_dir);
             LOG("screenshots -> %s", shot_dir.string().c_str());
         }
+        input::Input in;
+        in.init({&rt, env, jni::find_class(std::string(jni::kPkg) + "GameGLSurfaceView"), c_g2}, kW, kH);
+        if (!opt.input.empty()) {
+            std::string ierr;
+            if (!in.parse_script(opt.input, &ierr)) FATAL("%s", ierr.c_str());
+        }
+        std::set<int> shots_at;
+        {
+            std::stringstream ss(opt.shots_at);
+            std::string tok;
+            while (std::getline(ss, tok, ',')) if (!tok.empty()) shots_at.insert(std::atoi(tok.c_str()));
+        }
+        if (!shots_at.empty() && !opt.shot_every) {
+            fs::create_directories(shot_dir);
+            LOG("screenshots -> %s", shot_dir.string().c_str());
+        }
+
         bool running = true;
         auto last_report = std::chrono::steady_clock::now();
         int frames_since = 0;
         for (; running && (opt.frames <= 0 || frame < opt.frames); ++frame) {
             SDL_Event ev;
-            while (SDL_PollEvent(&ev))
+            while (SDL_PollEvent(&ev)) {
                 if (ev.type == SDL_QUIT) running = false;
+                else in.handle(ev);
+            }
+            in.run_script(frame);
             if (frame == 0) native("Gangster2_nativeResume", {env, c_g2});
             cpu.call(rt.lib_func("Java_com_gameloft_android_GAND_GloftGMHP_ML_GameRenderer_nativeRender"), {env, c_gr});
-            if (opt.shot_every && (frame % opt.shot_every == 0 || frame == opt.frames - 1)) {
+            if ((opt.shot_every && (frame % opt.shot_every == 0 || frame == opt.frames - 1)) || shots_at.count(frame)) {
                 char path[64];
                 std::snprintf(path, sizeof path, "frame_%05d.bmp", frame);
                 gles1::screenshot((shot_dir / path).string().c_str(), kW, kH);

@@ -33,6 +33,7 @@ add_executable(gangstar
     src/rt/runtime.cpp
     src/jni/jni.cpp
     src/gl/gles1.cpp
+    src/input/input.cpp
     src/game.cpp
     src/selftest.cpp
 )
