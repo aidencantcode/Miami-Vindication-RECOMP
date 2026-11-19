@@ -18,6 +18,7 @@ struct FrameStats {
     double game_ms = 0;        // time inside nativeRender per frame
     int render_w = 0, render_h = 0;  // internal resolution
     int game_w = 0, game_h = 0;      // what the game is told
+    int fast_forward = 0;            // current fast-forward speed (0 = off)
 };
 
 bool init(SDL_Window* win, SDL_GLContext ctx);

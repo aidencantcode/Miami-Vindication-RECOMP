@@ -19,6 +19,7 @@ uint32_t g_hud = 0;  // CHudManager*
 bool g_hidden = false;
 bool g_steer_on = false;
 float g_steer = 0;
+int64_t g_step_ms = 0, g_steps = 0;  // game time steps since the last take_step_stats()
 
 // CHudManager fields holding touch controls (from CHudManager::load), with their classes.
 struct ControlField { int offset; const char* kind; };
@@ -103,6 +104,13 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
                            "_ZNK5Wheel6draw2dEv"})
         rt.hook_function(fn, {[](cpu::Cpu& c) { return g_hidden && is_control(c.reg(cpu::R0)); }, nullptr});
 
+    // ---- statistics: the game's own time step (Application::_Update(int dt_ms)) --------------------
+    rt.hook_function("_ZN11Application7_UpdateEi", {[](cpu::Cpu& c) {
+        g_step_ms += int32_t(c.reg(cpu::R1));
+        ++g_steps;
+        return false;
+    }, nullptr});
+
     // ---- text changes (string tables served through hle/overrides) ---------------------------------
     // init.english: 0 "Loading", 1 "Touch the screen to continue", 2 copyright, 3 digits, 4 warning.
     // about.english (INFO > ABOUT): entries 0-5 are never shown; page 1 = entries 6 ("\0GANGSTAR...\1")
@@ -163,6 +171,14 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
         if (const uint32_t p = m.r32(veh + 0x280)) m.w32(p + 0x448, 0);
         return true;
     }, nullptr});
+}
+
+bool take_step_stats(double* avg_step_ms, int* steps) {
+    if (!g_steps) return false;
+    *avg_step_ms = double(g_step_ms) / double(g_steps);
+    *steps = int(g_steps);
+    g_step_ms = g_steps = 0;
+    return true;
 }
 
 void set_virtual_steering(bool on, float steer) {

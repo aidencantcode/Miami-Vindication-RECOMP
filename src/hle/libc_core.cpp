@@ -290,15 +290,24 @@ H(t_time) {
     if (p) M.w32(p, t);
     c.ret(t);
 }
+double g_time_scale = 1.0;
+int64_t game_time_us() {
+    using namespace std::chrono;
+    static const int64_t wall0 = duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
+    static auto last = steady_clock::now();
+    static double virt_us = 0;
+    const auto now = steady_clock::now();
+    virt_us += double(duration_cast<microseconds>(now - last).count()) * g_time_scale;
+    last = now;
+    return wall0 + int64_t(virt_us);
+}
 H(t_gettimeofday) {
     // The game's frame time step comes from this (glitch::os::Timer: dt = integer ms between frames),
     // so it must be monotonic: wall time at the first call + a steady clock. A wall-clock jump
     // (NTP, user changing the time) would otherwise give the game a negative or huge step.
-    using namespace std::chrono;
-    static const auto wall0 = duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
-    static const auto steady0 = steady_clock::now();
+    // Fast forward scales the elapsed time (set_time_scale), so game time runs faster.
     uint32_t tv = a.u32();
-    const auto us = wall0 + duration_cast<microseconds>(steady_clock::now() - steady0).count();
+    const int64_t us = game_time_us();
     if (tv) { M.w32(tv, uint32_t(us / 1000000)); M.w32(tv + 4, uint32_t(us % 1000000)); }
     c.ret(0);
 }
@@ -452,5 +461,8 @@ void register_libc_core(rt::Runtime& rt) {
     };
     for (const auto& [name, h] : table) rt.set_handler(name, h);
 }
+
+void set_time_scale(double scale) { g_time_scale = std::clamp(scale, 0.0, 16.0); }
+double time_scale() { return g_time_scale; }
 
 }  // namespace hle

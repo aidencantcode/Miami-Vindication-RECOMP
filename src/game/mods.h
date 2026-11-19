@@ -52,6 +52,9 @@ int steering_mode(rt::Runtime& rt);
 // (input feeds a neutral reading every frame) because they are what runs the handler.
 void set_virtual_steering(bool on, float steer);
 
+// The game's own time step since the last call: average ms per Application::_Update and count.
+bool take_step_stats(double* avg_step_ms, int* steps);
+
 // Current controls (empty until the HUD has been created). screen = the game's logical size.
 std::vector<Control> controls(rt::Runtime& rt, int screen_w, int screen_h);
 void log_controls(rt::Runtime& rt, int screen_w, int screen_h);

@@ -254,6 +254,7 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
                     {"Radio on/off, next station", "D-pad up / right", "R / T"},
                     {"Pause / back", "Start (B in menus)", "Esc"},
                     {"Menus", "Stick moves a cursor, A clicks", "Mouse"},
+                    {"Fast forward on/off", "R3 (click right stick)", "F2"},
                     {"This menu", "Guide or L3+R3", "F1"},
                 };
                 for (const auto& r : rows) {
@@ -270,6 +271,8 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
             restart_note();
             ch |= ImGui::Checkbox("PC text (\"Press any button to start\", port credit)", &s.custom_text);
             restart_note();
+            ch |= combo_int("Fast forward speed", &s.fast_forward_speed, {{2, "2x"}, {3, "3x"}, {4, "4x"}, {6, "6x"}, {8, "8x"}});
+            ImGui::TextDisabled("Toggle with F2 or by clicking the right stick (R3).");
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
@@ -386,7 +389,7 @@ bool draw(settings::Settings& cfg, const FrameStats& st) {
     const auto now = std::chrono::steady_clock::now();
     g_toasts.erase(std::remove_if(g_toasts.begin(), g_toasts.end(), [&](const Toast& t) { return t.until < now; }),
                    g_toasts.end());
-    if (!g_open && !cfg.show_fps && g_toasts.empty()) return false;
+    if (!g_open && !cfg.show_fps && g_toasts.empty() && !st.fast_forward) return false;
 
     ImGui_ImplOpenGL3_NewFrame();
     platform_new_frame();
@@ -402,6 +405,14 @@ bool draw(settings::Settings& cfg, const FrameStats& st) {
         ImGui::SetNextWindowBgAlpha(0.45f);
         ImGui::Begin("##fps", nullptr, passive);
         ImGui::Text("%.0f fps  %.1f ms", st.fps, st.fps > 0 ? 1000.0 / st.fps : 0.0);
+        ImGui::End();
+    }
+    if (st.fast_forward) {  // always visible while fast forward is on
+        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + 8), ImGuiCond_Always,
+                                ImVec2(0.5f, 0));
+        ImGui::SetNextWindowBgAlpha(0.55f);
+        ImGui::Begin("##ff", nullptr, passive);
+        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.2f, 1.0f), ">> FF %dx", st.fast_forward);
         ImGui::End();
     }
     if (!g_toasts.empty()) {

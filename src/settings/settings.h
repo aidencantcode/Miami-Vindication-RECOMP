@@ -43,6 +43,7 @@ struct Settings {
     bool pause_when_unfocused = true;
     bool hide_store_buttons = true;         // remove the dead Gameloft LIVE! / More Games! main-menu buttons
     bool custom_text = true;                // "Press any button to start", port credit in the credits
+    int fast_forward_speed = 3;             // game speed while fast forward is on (F2 / R3): 2..8
 };
 
 bool load(const std::filesystem::path& file, Settings* s);   // false if the file did not exist

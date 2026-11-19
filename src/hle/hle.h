@@ -20,4 +20,8 @@ uint32_t game_malloc(cpu::Cpu& c, uint32_t size);
 std::string cformat(cpu::Cpu& c, const char* fmt, cpu::Args& args);
 int csscanf(cpu::Cpu& c, const char* input, const char* fmt, cpu::Args& args);
 
+// Game time speed (fast forward): scales the time gettimeofday reports. 1 = normal.
+void set_time_scale(double scale);
+double time_scale();
+
 }  // namespace hle

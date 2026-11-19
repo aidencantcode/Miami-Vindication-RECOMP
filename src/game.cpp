@@ -240,6 +240,15 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
         stats.game_w = kW;
         stats.game_h = kH;
         bool menu_was_open = false;
+        bool fast_forward = false, l3_held = false, r3_held = false, r3_chord = false;
+        auto toggle_ff = [&] {
+            fast_forward = !fast_forward;
+            const int speed = std::clamp(cfg.fast_forward_speed, 2, 8);
+            hle::set_time_scale(fast_forward ? speed : 1.0);
+            stats.fast_forward = fast_forward ? speed : 0;
+            ui::toast(fast_forward ? "Fast forward " + std::to_string(speed) + "x" : std::string("Normal speed"));
+        };
+        if (opt.fast_forward) toggle_ff();
         double open_settings_at = opt.open_settings_at;
         std::unordered_map<uint32_t, uint64_t> block_counts;
         double game_ms = 0;  // time inside nativeRender (emulated game code + GL calls) since last report
@@ -275,6 +284,27 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                     ui::toast(std::string("Controller connected: ") + (name ? name : "unknown"));
                 } else if (ev.type == SDL_CONTROLLERDEVICEREMOVED) {
                     ui::toast("Controller disconnected");
+                }
+                // Fast forward: F2, or a click of the right stick (on release, and not when it was part
+                // of the L3+R3 chord that opens the settings menu).
+                if (ev.type == SDL_KEYDOWN && !ev.key.repeat && ev.key.keysym.sym == SDLK_F2 && !ui::is_open()) {
+                    toggle_ff();
+                    continue;
+                }
+                if (ev.type == SDL_CONTROLLERBUTTONDOWN || ev.type == SDL_CONTROLLERBUTTONUP) {
+                    const bool down = ev.type == SDL_CONTROLLERBUTTONDOWN;
+                    if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_LEFTSTICK) {
+                        l3_held = down;
+                        if (down && r3_held) r3_chord = true;
+                    } else if (ev.cbutton.button == SDL_CONTROLLER_BUTTON_RIGHTSTICK) {
+                        if (down) {
+                            r3_held = true;
+                            r3_chord = l3_held;
+                        } else {
+                            if (r3_held && !r3_chord && !ui::is_open()) toggle_ff();
+                            r3_held = false;
+                        }
+                    }
                 }
                 if (ui::handle_event(ev)) continue;  // the settings menu has the input
                 in.handle(ev);
@@ -363,6 +393,10 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                     }
                     if (cfg.anisotropy != before.anisotropy) gles1::set_anisotropy(cfg.anisotropy);
                     apply_audio_volumes(cfg);
+                    if (fast_forward) {  // speed changed in the menu
+                        stats.fast_forward = std::clamp(cfg.fast_forward_speed, 2, 8);
+                        hle::set_time_scale(stats.fast_forward);
+                    }
                     in.apply_settings(cfg);
                     settings::save(settings_file, cfg);
                 }
@@ -411,8 +445,11 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
             }
             double dt = std::chrono::duration<double>(Clock::now() - last_report).count();
             if (dt >= 2.0) {
-                LOG("frame %d: %.1f fps, game %.1f ms/frame, %llu draw calls total, heap %u KB", frame,
-                    frames_since / dt, frames_since ? game_ms / frames_since : 0.0,
+                double step_ms = 0;
+                int steps = 0;
+                mods::take_step_stats(&step_ms, &steps);
+                LOG("frame %d: %.1f fps, game %.1f ms/frame, game step %.1f ms (x%d), %llu draw calls total, heap %u KB",
+                    frame, frames_since / dt, frames_since ? game_ms / frames_since : 0.0, step_ms, steps,
                     (unsigned long long)gles1::draw_calls(), (rt.brk() - layout::kSbrkBase) / 1024);
                 game_ms = 0;
                 if (opt.profile_traps) {

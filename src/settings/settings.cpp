@@ -71,6 +71,7 @@ const std::vector<Field>& fields() {
         F("game", "pause_when_unfocused", &Settings::pause_when_unfocused),
         F("game", "hide_store_buttons", &Settings::hide_store_buttons),
         F("game", "custom_text", &Settings::custom_text),
+        F("game", "fast_forward_speed", &Settings::fast_forward_speed),
     };
     return f;
 }

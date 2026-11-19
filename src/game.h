@@ -23,6 +23,7 @@ struct RunOptions {
     double open_settings_at = -1;    // open the settings menu at this time (s), for screenshots
     std::vector<std::string> set;    // settings overrides "section.key=value" (--set, repeatable)
     std::string audio_dump;          // write the mixed audio output to this WAV file at exit
+    bool fast_forward = false;       // start with fast forward on (tests)
 };
 
 int run_game(const rt::Paths& paths, const RunOptions& opt);

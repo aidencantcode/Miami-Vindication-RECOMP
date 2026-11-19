@@ -90,6 +90,7 @@ int main(int argc, char** argv) {
         if (!std::strcmp(argv[i], "--profile-traps")) opt.profile_traps = true;
         else if (!std::strcmp(argv[i], "--no-vsync")) opt.no_vsync = true;
         else if (!std::strcmp(argv[i], "--no-mods")) opt.no_mods = true;
+        else if (!std::strcmp(argv[i], "--ff")) opt.fast_forward = true;
     for (int i = 1; i + 1 < argc; ++i) {
         if (!std::strcmp(argv[i], "--frames")) frames = opt.frames = std::atoi(argv[i + 1]);
         if (!std::strcmp(argv[i], "--shot-every")) opt.shot_every = std::atoi(argv[i + 1]);
