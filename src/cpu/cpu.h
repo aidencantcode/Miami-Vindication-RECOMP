@@ -84,6 +84,9 @@ public:
 
     // Profiling: count executed instructions per basic-block start address (slow; diagnostics only).
     void enable_block_profile(std::unordered_map<uint32_t, uint64_t>* counts);
+    // Debugging: log (once per distinct code address) every guest write into [addr, addr+size).
+    void watch_writes(uint32_t addr, uint32_t size);
+    void flush_translations();  // only between guest calls (depth 0)
 
     // Diagnostics
     std::string where(uint32_t addr) const;

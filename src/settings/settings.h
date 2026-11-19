@@ -32,6 +32,7 @@ struct Settings {
     float mouse_sensitivity = 1.0f;
     bool invert_camera_y = false;
     bool mouse_look = true;                 // lock the cursor in gameplay; the mouse turns the camera, left click attacks
+    std::string camera_mode = "classic";    // classic (phone: swings behind you) | freeform | first_person
     float stick_deadzone = 0.2f;
 
     // [audio]

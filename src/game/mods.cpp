@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <unordered_set>
 
 #include "core/log.h"
@@ -20,6 +21,12 @@ bool g_hidden = false;
 bool g_steer_on = false;
 float g_steer = 0;
 int64_t g_step_ms = 0, g_steps = 0;  // game time steps since the last take_step_stats()
+uint32_t g_cam_watch = 0;
+bool g_cam_watch_done = false;
+std::string g_camera_mode = "classic";  // classic | freeform | first_person
+uint32_t g_cam_self = 0;                // FollowCamera being updated (pre -> post)
+uint32_t g_cm_self = 0;                 // CameraManager being updated (pre -> post), first person only
+float g_cam_look[3] = {}, g_cam_off[3] = {};
 
 // CHudManager fields holding touch controls (from CHudManager::load), with their classes.
 struct ControlField { int offset; const char* kind; };
@@ -111,6 +118,101 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
         return false;
     }, nullptr});
 
+    // ---- camera modes ---------------------------------------------------------------------------
+    // FollowCamera (on-foot camera): position at +0x08, look-at at +0x14 (Camera::getPosition /
+    // getLookAt). FollowCamera::update moves the camera back behind the character every frame
+    // (the phone's auto-centering); drags arrive as per-frame yaw/pitch deltas (+0x34/+0x38, from
+    // updateAngles) that updatePosition applies as rotations around the target and then zeroes.
+    // Freeform: keep the camera's offset from its look-at point across the game's update, so it
+    // follows the character without swinging behind it; drags still rotate it.
+    g_camera_mode = s.camera_mode;
+    rt.hook_function("_ZN12FollowCamera6updateEf", {
+        [](cpu::Cpu& c) {
+            if (g_camera_mode != "freeform") return false;
+            auto& m = c.rt().mem();
+            const uint32_t cam = c.reg(cpu::R0);
+            g_cam_self = cam;
+            for (int i = 0; i < 3; ++i) {
+                g_cam_look[i] = f32_at(cam + 0x14 + 4 * i);
+                g_cam_off[i] = f32_at(cam + 0x08 + 4 * i) - g_cam_look[i];
+            }
+            (void)m;
+            return false;
+        },
+        [](cpu::Cpu& c) {
+            if (g_camera_mode != "freeform" || !g_cam_self) return;
+            auto& m = c.rt().mem();
+            const uint32_t cam = g_cam_self;
+            g_cam_self = 0;
+            float look[3], jump2 = 0, off2 = 0;
+            for (int i = 0; i < 3; ++i) {
+                look[i] = f32_at(cam + 0x14 + 4 * i);
+                jump2 += (look[i] - g_cam_look[i]) * (look[i] - g_cam_look[i]);
+                off2 += g_cam_off[i] * g_cam_off[i];
+            }
+            if (off2 <= 0 || jump2 > 4 * off2) return;  // cut, teleport or a new target: let the game place it
+            for (int i = 0; i < 3; ++i) {
+                const float v = look[i] + g_cam_off[i];
+                uint32_t bits;
+                std::memcpy(&bits, &v, 4);
+                m.w32(cam + 0x08 + 4 * i, bits);
+            }
+        }});
+
+    // First person (on foot): after CameraManager::update has placed the scene camera node
+    // (this+0, vfuncs +0xA4 setPosition / +0x104 setTarget, the same calls the game makes), move the
+    // node to the look-at point (the character's head) facing along the third-person view direction.
+    // The game's camera logic keeps running unchanged, so drags/mouse still turn the view. Only while
+    // the active camera (this+8) is the FollowCamera; driving, cutscenes etc. are untouched.
+    rt.hook_function("_ZN13CameraManager6updateEi", {
+        [](cpu::Cpu& c) {
+            g_cm_self = g_camera_mode == "first_person" ? c.reg(cpu::R0) : 0;
+            return false;
+        },
+        [](cpu::Cpu& c) {
+            if (!g_cm_self) return;
+            auto& r = c.rt();
+            auto& m = r.mem();
+            const uint32_t cm = g_cm_self;
+            g_cm_self = 0;
+            const uint32_t cam = m.r32(cm + 8), node = m.r32(cm);
+            static const uint32_t follow_vt = r.lib_object("_ZTV12FollowCamera") + 8;
+            if (!cam || !node || m.r32(cam) != follow_vt) return;
+            float pos[3], look[3], d[3], len = 0;
+            for (int i = 0; i < 3; ++i) {
+                pos[i] = f32_at(cam + 0x08 + 4 * i);
+                look[i] = f32_at(cam + 0x14 + 4 * i);
+                d[i] = look[i] - pos[i];
+                len += d[i] * d[i];
+            }
+            if (len <= 1e-6f) return;
+            len = std::sqrt(len);
+            static uint32_t scratch = 0;
+            if (!scratch) scratch = r.heap().alloc(32);
+            float eye[3], tgt[3];
+            for (int i = 0; i < 3; ++i) {
+                eye[i] = look[i];
+                tgt[i] = look[i] + d[i] / len * 100.0f;
+            }
+            m.write(scratch, eye, 12);
+            m.write(scratch + 16, tgt, 12);
+            const uint32_t vt = m.r32(node);
+            c.call(m.r32(vt + 0xa4), {node, scratch});        // setPosition
+            c.call(m.r32(vt + 0x104), {node, scratch + 16});  // setTarget
+        }});
+
+    // ---- debugging: where does the follow camera's yaw/pitch get pulled back? ----------------------
+    if (std::getenv("GS_WATCH_CAMERA")) {
+        rt.hook_function("_ZN12FollowCamera12updateAnglesEii", {[](cpu::Cpu& c) {
+            static int n = 0;
+            if (n++ < 20)
+                LOG("FollowCamera::updateAngles(this=%08x, dx=%d, dy=%d)", c.reg(cpu::R0), int32_t(c.reg(cpu::R1)),
+                    int32_t(c.reg(cpu::R2)));
+            if (!g_cam_watch_done && !g_cam_watch) g_cam_watch = c.reg(cpu::R0);
+            return false;
+        }, nullptr});
+    }
+
     // ---- text changes (string tables served through hle/overrides) ---------------------------------
     // init.english: 0 "Loading", 1 "Touch the screen to continue", 2 copyright, 3 digits, 4 warning.
     // about.english (INFO > ABOUT): entries 0-5 are never shown; page 1 = entries 6 ("\0GANGSTAR...\1")
@@ -171,6 +273,17 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
         if (const uint32_t p = m.r32(veh + 0x280)) m.w32(p + 0x448, 0);
         return true;
     }, nullptr});
+}
+
+void set_camera_mode(const std::string& mode) { g_camera_mode = mode; }
+
+uint32_t take_camera_to_watch() {
+    const uint32_t a = g_cam_watch;
+    if (a) {
+        g_cam_watch = 0;
+        g_cam_watch_done = true;
+    }
+    return a;
 }
 
 bool take_step_stats(double* avg_step_ms, int* steps) {

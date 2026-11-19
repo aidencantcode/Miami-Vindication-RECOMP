@@ -241,6 +241,10 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
                             {{"auto", "Auto (hide while a controller or keyboard plays)"}, {"show", "Always show"},
                              {"hide", "Always hide"}});
             ch |= ImGui::SliderFloat("Camera speed", &s.mouse_sensitivity, 0.1f, 5.0f, "%.2f");
+            ch |= combo_str("Camera", &s.camera_mode,
+                            {{"classic", "Classic (swings back behind you, like the phone)"},
+                             {"freeform", "Freeform (stays where you point it)"},
+                             {"first_person", "First person (on foot)"}});
             ch |= ImGui::Checkbox("Mouse look (lock the cursor while playing)", &s.mouse_look);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("The mouse turns the camera and left click attacks. The cursor is released\n"

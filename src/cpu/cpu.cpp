@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <set>
 #include <stdexcept>
 
 #include "core/layout.h"
@@ -277,4 +278,30 @@ std::string Cpu::dump() const {
     return out;
 }
 
+}  // namespace cpu
+
+namespace cpu {
+namespace {
+struct WriteWatch { Cpu* cpu; std::set<uint32_t> seen; };
+void on_watch_write(uc_struct*, uc_mem_type, uint64_t addr, int size, int64_t value, void* user) {
+    auto* w = static_cast<WriteWatch*>(user);
+    const uint32_t pc = w->cpu->reg(PC);
+    if (w->seen.insert(pc).second)
+        LOG("watch: write %d bytes at %08llx (value %08llx) from %s", size, (unsigned long long)addr,
+            (unsigned long long)value, w->cpu->where(pc).c_str());
+}
+}  // namespace
+
+void Cpu::watch_writes(uint32_t addr, uint32_t size) {
+    auto* w = new WriteWatch{this, {}};  // lives as long as the hook (debugging only)
+    uc_hook h;
+    check_uc(uc_hook_add(uc_, &h, UC_HOOK_MEM_WRITE, reinterpret_cast<void*>(&on_watch_write), w, addr,
+                         addr + size - 1),
+             "hook mem write");
+    LOG("watch: guest writes to %08x..%08x", addr, addr + size - 1);
+}
+}  // namespace cpu
+
+namespace cpu {
+void Cpu::flush_translations() { check_uc(uc_ctl_flush_tb(uc_), "flush translation cache"); }
 }  // namespace cpu

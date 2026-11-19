@@ -334,6 +334,10 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 dump_hud_at = -1;
             }
             if (frame == 0) native("Gangster2_nativeResume", {env, c_g2});
+            if (const uint32_t cam = mods::take_camera_to_watch()) {  // GS_WATCH_CAMERA debugging
+                cpu.watch_writes(cam + 0x2c, 0x14);
+                cpu.flush_translations();
+            }
             switch (jni::take_app_request()) {  // Gangster2.Exit / sendAppToBackground from the last frame
                 case jni::AppRequest::Quit:
                     LOG("game asked to exit (Gangster2.Exit)");
@@ -408,6 +412,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                     if (cfg.anisotropy != before.anisotropy) gles1::set_anisotropy(cfg.anisotropy);
                     if (cfg.texture_filter != before.texture_filter) gles1::set_texture_filter(filter_of(cfg.texture_filter));
                     apply_audio_volumes(cfg);
+                    if (cfg.camera_mode != before.camera_mode) mods::set_camera_mode(cfg.camera_mode);
                     if (fast_forward) {  // speed changed in the menu
                         stats.fast_forward = std::clamp(cfg.fast_forward_speed, 2, 8);
                         hle::set_time_scale(stats.fast_forward);
