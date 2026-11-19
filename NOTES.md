@@ -673,3 +673,54 @@ None of this applies to a PC port: we replace the whole Android/Java layer ourse
   Gameloft LIVE! froze the main menu, More Games! left sounds paused (activity "bounce", §6c).
   Draw-distance A/B screenshots are still to do: time-based scripts drift with load times, so they
   need a reliable way to reach the same view (e.g. a script "wait until gameplay" step).
+
+### 2026-11-19 (scheduled run, owner's list): exit, menus, text, FF, filtering, mouse, latency, perf
+- Done and verified (commits d1265b2..bc0e2c9):
+  - **In-game exit**: Java `Gangster2.Exit()` (finish + System.exit) now ends the loop cleanly;
+    `sendAppToBackground` minimizes.
+  - **Main menu**: Gameloft LIVE! (`widgetMainMenu.btnGLLive`, event 3) and More Games!
+    (`btnMore`, event 4) hidden via `RenderFX::SetVisible(false)` after `MainMenu::GotFocus`, and
+    their events dropped in `MainMenu::Notify` ([game] hide_store_buttons).
+  - **Runtime fix**: the post-hook trap now returns via the stub's `bx lr` (LR = caller) instead of
+    writing PC. Writing PC after nested guest calls in the same svc hook made Unicorn stop the
+    outer emulation ("did not return").
+  - **Text overrides** (`hle/overrides`, [game] custom_text): data files are rewritten into
+    `work/sandbox/overrides/` at open time. init.english entry 1 is "Press any button to start";
+    about.english entry 14 is the heading "DECOMP BY AIDENCANTCODE" at the top of the scrolling
+    credits. String table format: u16 count, then (u16 len, bytes). `\0`..`\1` = heading style,
+    `\n` = blank line, `|` = wrap point. Finding: lowercase letters in heading style aren't
+    pre-rendered; adding them overflowed the glyph cache at boot and the title prompt vanished.
+  - **Fast forward**: game time = steady clock × scale in `gettimeofday`. F2 / R3 click (R3
+    toggles on release, not when part of L3+R3). 2-8x, indicator. The game clamps a step to
+    100 ms, so below ~33 fps the effective speed is lower. The 2 s log now shows "game step".
+  - **Texture filtering**: game / nearest / bilinear / trilinear, live. The bridge remembers each
+    texture's game filters and keeps its mip/no-mip choice.
+  - **Mouse look**: SDL relative mode in gameplay (unlocks in menus/cutscenes/F1/focus loss);
+    mouse = camera drag, LMB = attack, wheel = weapons ([controls] mouse_look).
+  - **Low-latency mode** (glFinish after swap) and an input-to-screen latency readout. Input is
+    already sampled right before nativeRender; the remaining delay is the emulated frame time.
+- Performance (tools/bench.ps1: spawn, standing, 2 runs each): baseline ~49 ms/frame (~19 fps).
+  `quality=low` ~39 ms (-20%, fewer NPCs, shorter view). Tried and reverted:
+  - **"fast traps"** (`nop; bx lr` stubs handled from a Unicorn code hook instead of svc):
+    trivially correct handlers still broke the game (pthread_mutex_lock -> null write in
+    gameswf, memcpy -> hang). Isolated Python tests of the same pattern work. Unexplained, so not
+    used.
+  - **PLT -> direct branch** for the 35 fastpath helpers: no measurable change.
+  - **Unicorn TB cache**: already 1 GB. **Logging**: negligible (136 lines per gameplay stretch).
+  - Conclusion: under Unicorn the cost is QEMU's translated code itself (soft-float helpers,
+    memory paths). Next lever: dynarmic (JIT with host FP) or the Phase 4 recompiler.
+- "quality = phone" really loads profile 1 (high): the game picks it for our "NVIDIA Tegra"
+  identity. Earlier notes said profile 0; corrected in the UI labels.
+- Ghidra project repaired (Q22, `tools/ghidra/FixNoReturn.java`).
+- **Radio station box** (top HUD while driving): the frame's right border is cut by a straight
+  vertical edge at the same authoring position at 800 and 854 wide, while the arrows and text
+  are complete. Ruled out: glScissor (only one call, at init), face culling (same with culling
+  off), screen width. Next suspects: the sprite/gameswf path that draws the frame (mirrored
+  right half or atlas UVs). Not fixed yet.
+- **Camera RE so far**: `CameraManager::goBehind` is only called from `Player::initDriving`.
+  `FollowCamera::update` places the camera at lookAt + v(character vfunc +300) × distance each
+  frame; drags go through `FollowCamera::updateAngles(dx, dy)` -> this+0x34 (yaw) / +0x38
+  (pitch). The auto-centering most likely lives in that vfunc/angle decay. Camera modes
+  (freeform / first person) are not done yet.
+- Next: camera modes (find where the yaw offset decays back to 0; first person via FPSCamera or
+  a head-mounted FollowCamera), radio frame, dynarmic evaluation (time-boxed), Phase 4.
