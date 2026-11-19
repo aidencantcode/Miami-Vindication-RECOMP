@@ -851,3 +851,8 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   the emulator). `tools\build.ps1` builds it whenever `work/recomp` has been generated
   (`-Recomp` the first time, `-NoRecomp` to leave it out) and re-runs the generator when
   `tools/recomp/*.py` changed (stamp file `work/recomp/.codegen_stamp`).
+- **Driving under recomp** (NOTES car-entry script + RT/steer): enters the car, starts "Get to the
+  nearest gas station", accelerates and steers; game logic 2.4–2.9 ms/frame while driving. The
+  same script on `--cpu unicorn` gives the same picture at t79 (blue car on the road, same HUD,
+  47 ms/frame, 20 fps). Hooks are confirmed working in recomp mode through the main-menu store
+  buttons (post hook on GotFocus, pre hook on Notify); camera modes not yet tried there.
