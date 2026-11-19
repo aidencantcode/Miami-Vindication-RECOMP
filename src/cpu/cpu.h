@@ -14,6 +14,7 @@
 #include <vector>
 
 struct uc_struct;
+struct RcState;  // recompiled backend state (src/recomp/rc.h)
 
 namespace rt { class Runtime; }
 
@@ -88,6 +89,18 @@ public:
     void watch_writes(uint32_t addr, uint32_t size);
     void flush_translations();  // only between guest calls (depth 0)
 
+    // Recompiled backend (Phase 4): registers live in an RcState, call() runs recompiled code (through
+    // set_recomp_call), redirect() is remembered for the caller (take_redirect) instead of moving PC.
+    void attach_recomp(::RcState* s) { rc_ = s; }
+    ::RcState* recomp() const { return rc_; }
+    bool take_redirect(uint32_t* addr) {
+        if (!rc_has_redirect_) return false;
+        rc_has_redirect_ = false;
+        *addr = rc_redirect_;
+        return true;
+    }
+    static void set_recomp_call(void (*fn)(::RcState*, uint32_t)) { rc_call_ = fn; }
+
     // Diagnostics
     std::string where(uint32_t addr) const;
     std::string dump() const;
@@ -108,6 +121,10 @@ private:
     int depth_ = 0;
     bool returned_ = false;
     std::string last_fault_;
+    ::RcState* rc_ = nullptr;
+    uint32_t rc_redirect_ = 0;
+    bool rc_has_redirect_ = false;
+    static inline void (*rc_call_)(::RcState*, uint32_t) = nullptr;
 };
 
 }  // namespace cpu

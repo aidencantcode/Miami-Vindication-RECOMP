@@ -591,7 +591,7 @@ None of this applies to a PC port: we replace the whole Android/Java layer ourse
 
 Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/symbols/PLT,
 `analyze.py` per-function analysis shared by survey and code generator, `survey.py` → 
-`analysis/recomp_survey.md`). Run: `python -I toolsecompsurvey.py`.
+`analysis/recomp_survey.md`). Run: `python -I tools/recomp/survey.py`.
 
 **4.1 survey results (2026-11-19):**
 - `.text` 3.19 MB: 3.0 MB `$t`, 12.5 KB `$a`, 165 KB `$d` (literal pools, jump tables).
@@ -602,19 +602,68 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   bx ip` (rN = r0, once r1): adjust `this`, tail-call target = add-address + 8 + literal. The last
   one is `__aeabi_f2uiz` (float → unsigned), which will be implemented in C.
 - **No cross-function branches** (the 18 the raw walk saw come from the mislabelled thunks), no extra
-  entry points. 2,210 `bl` target their own function: GCC Thumb-1 "far jump" (long branch through
-  `bl`, LR saved in the prologue), so they become `goto`.
+  entry points. 2,210 `bl` target a label inside their own function: GCC Thumb-1 "far jump" (long
+  branch through `bl`, LR saved in the prologue), so they become `goto`. **A `bl` to the function's
+  own entry is recursion, not a far jump** (232 sites, e.g. rb-tree `_M_erase`): a real call.
 - Calls: 58,401 `bl` to function starts, 40,129 `blx` to the PLT (imports), 381 `blx` to ARM thunks,
   13,083 `blx reg` (virtual calls / function pointers). Returns: 18,331 `pop {..pc}`, 5,013 `bx lr`,
   57 `bx r3` right after `add sp` (the return address was popped into r3).
 - **Jump tables**: all 227 `mov pc, reg` recovered. Pattern: table = GOT (`0x6349d8`) + literal,
   target = table + entry. ARMv5T `mov pc` does not interwork (bit 0 may be clear). Bound from `cmp
-  rX,#N` + `bhi/bls` (N+1) or `bcs/bcc` (N). 220 exact; 7 (FreeType parsers, Vsnprintf, sky box,
-  collada) are unbounded guesses. Generated code has to fail loudly on a target outside the table.
+  rX,#N` + `bhi/bls` (N+1) or `bcs/bcc` (N) **on the path into the jump**: walk back through code
+  that falls through into it, never across `b`/`bx`/`pop {pc}`; if that boundary comes first, the
+  table block is only entered by branches, and the bound is the guard of the branch that targets it
+  (`cmp r3,#12; bls table_block`). 224 exact, 3 unbounded guesses (FreeType `pfr_glyph_load_rec`,
+  `parse_dict`, `ft_gzip_file_fill_output`). The first version (nearest `cmp` above, in address
+  order) read a neighbouring switch's bound for 3 tables: `Vehicle::Load` 2 instead of 13 (crashed
+  at the first car load), `CImageLoaderPVR::loadTextureHeader` 88/87, `t1_decoder` 13/27. Generated
+  code fails loudly (`rc_bad_jump`) on a target outside the table.
 - 727 functions end with a call to a no-return function (abort/longjmp/assert): generated code puts
   a fatal "fell off the end" after it. Trailing `mov r8, r8` / `0x0000` is alignment padding.
 - `add rX, pc` appears 8,979 times (PIC GOT base). Literal pools are constants (no relocations in
-  the code segment), so they can be folded at translation time.
+  the code segment, checked: 0 of 47,173 relocations land in the RX segment, no DT_TEXTREL), so
+  they can be folded at translation time.
+
+**4.2 code generator** (`tools/recomp/codegen.py` → `work/recomp/`, git-ignored, 51 MB C):
+- 24,199 functions, 1.40 M instructions, 0 unhandled, 121 `rc_part_NNN.c` + `rc_table.c`. Runtime
+  contract in `src/recomp/rc.h` (registers in `RcState`, NZCV as C locals, fastmem macros, ARM
+  semantics for shifts by register, VFP-style float→int). 35 soft-float/division helpers are emitted
+  inline as C; `__aeabi_f2uiz` (the one non-thunk ARM function) is C.
+- Only changed files are rewritten, so a regeneration rebuilds only what changed (full build of the
+  library ≈ 8 min on 12 threads; one file ≈ 30 s).
+- MSVC's optimizer needs 6+ minutes each for the gameswf debug disassemblers `log_disasm_avm2` /
+  `log_disasm` (found with `/d2cgsummary`): they are compiled with `#pragma optimize("", off)`.
+- `setjmp` call sites become `setjmp(*rc_setjmp_slot(s))` in the calling function's frame; guest
+  `longjmp` (direct or through a pointer) restores r4-r11/sp and host-`longjmp`s there.
+- Functions hooked by mods (list `HOOKABLE` in codegen.py, keep in sync with `src/game/mods.cpp`)
+  get `rc_hook_enter`/`rc_hook_leave` around their body, which run the same
+  `rt::Runtime::hook_function` hooks as the Unicorn code hooks. `--probe NAME` adds more (debug).
+
+**4.4 runtime backend** (`src/recomp/rc_runtime.cpp`, `--cpu recomp`, build `tools\build.ps1 -Recomp`):
+- `cpu::Cpu` keeps its interface: in recomp mode registers live in the `RcState`, `call()` is a C
+  call, a handler's PC write is a "redirect" for the caller. HLE/JNI/GL handlers are unchanged.
+- Indirect calls: 8192-entry cache + binary search of the sorted function table; trap-region
+  addresses go to HLE. Main thread stack 64 MB (every guest call is a host call).
+- Crash report: unhandled host exceptions print the guest address (if inside the 4 GB reservation),
+  guest registers and the host stack mapped back to game functions. Read-only guest regions (code,
+  rodata) are made read-only on the host too.
+- `GANGSTAR_RC_SAMPLE=<s>`: after s seconds, sample the main thread's stack 4 times (hangs).
+- **Result (2026-11-19):** boots to the title screen and stays there; game logic **0.2–0.6 ms per
+  frame** (Unicorn: ~49 ms in gameplay, a few ms in menus); loading the first scene 27 ms/frame
+  peak. Not yet tested: gameplay, mods enabled in recomp mode.
+
+**Backend comparison tools** (how the two bugs above were found):
+- `GANGSTAR_FIXED_TIME=1`: gettimeofday advances exactly 1 ms per call from a fixed start, `time()` is
+  constant → both backends run the same deterministic boot.
+- `GANGSTAR_TRACE_IMPORTS=<file>` (+ `GANGSTAR_TRACE_MAX`): one line per import call (name, return
+  address, r0-r3). Helpers the recompiler inlines are left out of the trace and its numbering. Run
+  the Unicorn side with `--no-fastpath` so trap addresses match. `tools/recomp/trace_diff.py`.
+- `GANGSTAR_MEMDUMP_AT=<n>`: dump all guest memory + registers at import call n →
+  `tools/recomp/mem_diff.py` (identical except one return-to-host sentinel on the stack).
+- `GANGSTAR_PROBE=<symbol>`, `GANGSTAR_PROBE_HIT=<n>`, `GANGSTAR_PROBE_OUT=<file>`,
+  `GANGSTAR_PROBE_EXIT=1`: the same dump at the n-th entry (or exit) of a game function (recomp mode
+  needs `codegen.py --probe <symbol>`). Bisection over n finds the first call where the backends
+  differ; the dump log line includes the caller's `lr`.
 
 ## 10. Glossary (RE terms as they come up)
 
@@ -772,3 +821,24 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   partly duplicates Phase 4 (the recompiler, also the Android path). **Owner decision:** go
   straight to Phase 4 (recommended), or do dynarmic first as a stopgap for a faster emulated build.
 - Regression check after everything: still ~49-50 ms/frame at the spawn (same as before).
+
+### 2026-11-19 (evening): Phase 4.2 + 4.4: the recompiled game boots to the title screen
+- Owner chose Phase 4 over a dynarmic stopgap. 4.1 survey committed earlier (cd01ad1).
+- **4.2:** `tools/recomp/codegen.py` translates all 24,199 functions (0 unhandled) into C that
+  MSVC compiles (`-Recomp` build option, library `game_recomp`). Details in §11.
+- **4.4:** `--cpu recomp` backend (`src/recomp/rc_runtime.cpp`). First boot ran static
+  constructors, JNI_OnLoad, nativeInit/Resume and PostInit natively, then hung in material
+  loading. Two translation bugs, both found by comparing against Unicorn (tools in §11):
+  1. `bl` to the function's own entry (recursion, 232 functions) was emitted as a far-jump `goto`:
+     the rb-tree `_M_erase` restarted itself instead of recursing, a process-buffer list ended up
+     cyclic, and `SCreationState::~SCreationState` looped forever. Bisected with probes on
+     `releaseProcessBuffer`: state identical at entry and exit of call 8, call 9 came from different
+     callers (`lr`), which pointed at `_M_erase`.
+  2. Jump-table bounds taken from the nearest `cmp` above the table in address order instead of the
+     one on the path into it: `Vehicle::Load` got 2 of 13 entries (`rc_bad_jump` at the first car
+     load); 2 more tables were off. All 227 tables re-checked against the machine code.
+- Result: title screen, stable for 40 s+, game logic 0.2–0.6 ms/frame (Unicorn: ~49 ms in
+  gameplay). Screenshot identical in look to the Unicorn build.
+- Next: (1) run with mods on in recomp mode (hook checks are generated), (2) script into gameplay
+  and compare with the Unicorn build (4.5), (3) measure gameplay frame time (4.6), (4) Android
+  build of the same C (Phase 5).

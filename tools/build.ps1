@@ -2,7 +2,9 @@
 #   .\tools\build.ps1                 # RelWithDebInfo
 #   .\tools\build.ps1 -Config debug
 # Visual Studio users can instead "Open Folder" on the repo; CMakePresets.json does the rest.
-param([ValidateSet("debug", "release")][string]$Config = "release")
+#   .\tools\build.ps1 -Recomp       # also build the recompiled game code (work/recomp, tools/recomp/codegen.py)
+#   .\tools\build.ps1 -Recomp -Target game_recomp
+param([ValidateSet("debug", "release")][string]$Config = "release", [switch]$Recomp, [string]$Target = "")
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 
@@ -21,8 +23,10 @@ try {
     # Native tools print warnings on stderr; PowerShell 5.1 would treat those as errors
     # under "Stop", so judge success by exit codes instead.
     $ErrorActionPreference = "Continue"
-    cmake --preset win-x64 2>&1 | ForEach-Object { "$_" }
+    $recompFlag = if ($Recomp) { "-DGANGSTAR_RECOMP=ON" } else { "-DGANGSTAR_RECOMP=OFF" }
+    cmake --preset win-x64 $recompFlag 2>&1 | ForEach-Object { "$_" }
     if ($LASTEXITCODE) { throw "configure failed" }
-    cmake --build --preset $Config 2>&1 | ForEach-Object { "$_" }
+    $targetArgs = if ($Target) { @("--target", $Target) } else { @() }
+    cmake --build --preset $Config @targetArgs 2>&1 | ForEach-Object { "$_" }
     if ($LASTEXITCODE) { throw "build failed" }
 } finally { Pop-Location }

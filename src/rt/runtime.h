@@ -51,6 +51,12 @@ public:
     };
     void hook_function(const std::string& symbol, FunctionHook h);
     void run_function_hook(cpu::Cpu& c, uint32_t addr);  // called by Cpu (code hook)
+    // The same hooks for the recompiled backend (generated entry/exit checks, rc_runtime.cpp):
+    int hook_index(uint32_t addr) const;          // -1: not hooked
+    bool run_pre_hook(cpu::Cpu& c, int idx);      // true: skip the function (r0 set by the hook)
+    void run_post_hook(cpu::Cpu& c, int idx);
+    // Debugging: write all guest memory (format of GANGSTAR_MEMDUMP_AT) and log the registers.
+    void dump_state(cpu::Cpu& c, const std::string& path, const std::string& label);
     uint32_t lib_object(const std::string& symbol) const;  // absolute address of a game global
     // Calls per hooked function so far (name, count), for --profile-traps reports.
     std::vector<std::pair<std::string, uint64_t>> hook_counts() const;

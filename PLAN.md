@@ -249,14 +249,17 @@ Milestones (each one or more commits, each with a pass/fail check):
   `analysis/recomp_survey.md`. ✔ when 100% of code decodes and every `mov pc, reg` is explained.
 - **4.2 Code generator v0.** C for every Thumb/ARM form the survey finds, plus the runtime header
   (state struct, memory access, flag helpers, dispatch table). Build the generated C in a test target.
-  ✔ when all of it compiles.
-- **4.3 Differential unit tests.** Harness: run leaf functions (then functions with stubbed callees)
-  under Unicorn and as compiled C on the same random inputs, compare registers + memory.
-  ✔ when thousands of functions match bit-exactly.
+  ✔ when all of it compiles. **Done 2026-11-19** (0 unhandled instructions, compiles with MSVC).
+- **4.3 Differential tests.** Planned as per-function unit tests on random inputs; in practice the
+  whole-run comparison (deterministic clock + import trace + full memory/register dumps at the N-th
+  import call or the N-th entry/exit of any function, bisected) found both real bugs within minutes,
+  so it replaces the unit-test harness for now (NOTES §11). Revisit unit tests only if a divergence
+  cannot be bisected this way.
 - **4.4 Runtime backend.** The CPU interface used by HLE/JNI/mods works on both backends;
   `--cpu recomp`; import calls bind to handlers; function hooks become checks at generated function
   entries; trace-compare mode. ✔ when boot reaches the title screen with an identical import trace
-  up to it.
+  up to it. **Done 2026-11-19**: title screen, stable, game logic 0.2–0.6 ms/frame. Open: run with
+  mods on (hooks are generated but untested), crash/hang handling polish.
 - **4.5 Gameplay.** Menus, intro, gameplay, driving; fix divergences found by trace comparison.
   ✔ when the scripted test runs match the Unicorn build (screenshots, audio).
 - **4.6 Performance.** Registers cached in locals, inlined float helpers, cheap dispatch, PGO/LTO.

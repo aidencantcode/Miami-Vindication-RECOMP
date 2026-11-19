@@ -127,18 +127,14 @@ Library: `libGangster2.so`; `.text` 3,185,996 bytes at `0x274c98`; `.plt` 3,500 
 
 ## Analysis (tools/recomp/analyze.py)
 
-- jump tables recovered: **227 of 227** (4,951 targets); unresolved: 0
+- jump tables recovered: **227 of 227** (4,845 targets); unresolved: 0
 - ARM thunks recognised: **783 of 784**
 - functions with extra entry points: 0 (0 entries)
-- per-function problems: 8
+- per-function problems: 4
   - pfr_glyph_load_rec: jump table at 0x5140a8: unbounded guess, 14 entries
   - parse_dict: jump table at 0x52acea: unbounded guess, 6 entries
-  - cff_decoder_parse_charstrings: jump table at 0x5372e0: unbounded guess, 61 entries
   - ft_gzip_file_fill_output: jump table at 0x53bdb4: unbounded guess, 15 entries
   - __aeabi_f2uiz: ARM function is not a thunk
-  - _ZN21CustomSkyBoxSceneNode11setSkyColorEN6glitch5video6SColorES2_S2_S2_S2_: jump table at 0x2d3c20: unbounded guess, 7 entries
-  - _ZN3glf9VsnprintfEPcjPKcSt9__va_list: jump table at 0x506264: unbounded guess, 109 entries
-  - _ZN6glitch7collada14createMaterialERKNS0_16CColladaDatabaseEPNS_5video12IVideoDriverERKN5boost13intrusive_ptrINS4_17CMaterialRendererEEERNS0_9SMaterialEPNS0_14CRootSceneNodeE: jump table at 0x478cc2: unbounded guess, 10 entries
 - functions whose last instruction is not a return/jump: 727 (blx 650, bl 77)
   - _ZL12init_mparamsv: ends with blx
   - _ZNSt3mapISsjSt4lessISsESaISt4pairIKSsjEEEixISsEERjRKT_.clone.13: ends with blx

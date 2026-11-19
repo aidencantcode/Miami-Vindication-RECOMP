@@ -1,5 +1,7 @@
 #include "rt/runtime.h"
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iterator>
 
@@ -13,6 +15,73 @@ namespace {
 #include "cpu/fastpath_code.inc"
 
 constexpr int kStubLogLimit = 3;
+
+// Import trace for backend comparisons (GANGSTAR_TRACE_IMPORTS=<file>, GANGSTAR_TRACE_MAX=<lines>):
+// one line per import call, "<n> <name> lr=<return address> <r0> <r1> <r2> <r3>". Both CPU backends
+// dispatch through here, so tools/recomp/trace_diff.py can find the first call where they differ.
+FILE* g_trace = nullptr;
+uint64_t g_trace_n = 0, g_trace_max = 0;
+bool g_trace_checked = false;
+
+// GANGSTAR_MEMDUMP_AT=<n> (with the trace on): at import call n, write every guest region to
+// <trace file>.mem (per region: u32 addr, u32 size, u32 name length, name, bytes) for
+// tools/recomp/mem_diff.py. With GANGSTAR_FIXED_TIME both backends should be byte-identical.
+uint64_t g_dump_at = 0;
+std::string g_dump_path;
+
+void dump_memory(const core::GuestMemory& m, cpu::Cpu& c, uint64_t n) {
+    FILE* f = std::fopen(g_dump_path.c_str(), "wb");
+    if (!f) return;
+    for (const core::Region& r : m.regions()) {
+        const uint32_t hdr[3] = {r.addr, r.size, uint32_t(r.name.size())};
+        std::fwrite(hdr, 4, 3, f);
+        std::fwrite(r.name.data(), 1, r.name.size(), f);
+        std::fwrite(m.base() + r.addr, 1, r.size, f);
+    }
+    std::fclose(f);
+    LOG("trace: guest memory at import call %llu -> %s (sp=%08x lr=%08x)", (unsigned long long)n,
+        g_dump_path.c_str(), c.reg(cpu::SP), c.reg(cpu::LR));
+    std::string regs;
+    for (int i = 0; i <= 12; ++i) {
+        char b[24];
+        std::snprintf(b, sizeof b, " r%d=%08x", i, c.reg(cpu::Reg(cpu::R0 + i)));
+        regs += b;
+    }
+    LOG("trace: registers%s", regs.c_str());
+}
+
+// Helpers the recompiler emits inline (tools/recomp/codegen.py INLINE_IMPORTS): never dispatched in
+// recomp mode, so they are left out of the trace and its numbering in both backends.
+bool inline_in_recomp(const std::string& n) {
+    static const char* const kInline[] = {
+        "__aeabi_fadd", "__aeabi_fsub", "__aeabi_fmul", "__aeabi_fdiv", "__aeabi_fcmpeq", "__aeabi_fcmplt",
+        "__aeabi_fcmple", "__aeabi_fcmpge", "__aeabi_fcmpgt", "__aeabi_f2iz", "__aeabi_f2d", "__aeabi_i2f",
+        "__aeabi_ui2f", "__aeabi_dadd", "__aeabi_dsub", "__aeabi_dmul", "__aeabi_ddiv", "__aeabi_dcmpeq",
+        "__aeabi_dcmplt", "__aeabi_dcmple", "__aeabi_dcmpge", "__aeabi_dcmpgt", "__aeabi_dcmpun", "__aeabi_d2f",
+        "__aeabi_d2iz", "__aeabi_d2uiz", "__aeabi_i2d", "__aeabi_ui2d", "__aeabi_idiv", "__aeabi_uidiv",
+        "__aeabi_idivmod", "__aeabi_uidivmod", "__aeabi_lmul", "sqrtf", "sqrt"};
+    for (const char* k : kInline)
+        if (n == k) return true;
+    return false;
+}
+std::vector<signed char> g_trace_skip;  // per trap index: -1 unknown, 0 traced, 1 skipped
+
+void trace_open() {
+    g_trace_checked = true;
+    const char* path = std::getenv("GANGSTAR_TRACE_IMPORTS");
+    if (!path || !*path) return;
+    if (const char* d = std::getenv("GANGSTAR_MEMDUMP_AT")) {
+        g_dump_at = std::strtoull(d, nullptr, 10);
+        g_dump_path = std::string(path) + ".mem";
+    }
+    g_trace = std::fopen(path, "wb");
+    const char* max = std::getenv("GANGSTAR_TRACE_MAX");
+    g_trace_max = max ? std::strtoull(max, nullptr, 10) : 5000000;
+    if (g_trace) {
+        std::setvbuf(g_trace, nullptr, _IOFBF, 1 << 20);
+        LOG("trace: import calls -> %s (max %llu)", path, (unsigned long long)g_trace_max);
+    }
+}
 
 }  // namespace
 
@@ -99,6 +168,27 @@ void Runtime::run_function_hook(cpu::Cpu& c, uint32_t addr) {
     }
 }
 
+int Runtime::hook_index(uint32_t addr) const {
+    auto it = fn_hook_at_.find(addr & ~1u);
+    return it == fn_hook_at_.end() ? -1 : it->second;
+}
+
+bool Runtime::run_pre_hook(cpu::Cpu& c, int idx) {
+    ++fn_hook_calls_[idx];
+    const FunctionHook& h = fn_hooks_[idx];
+    return h.pre && h.pre(c);
+}
+
+void Runtime::run_post_hook(cpu::Cpu& c, int idx) {
+    if (fn_hooks_[idx].post) fn_hooks_[idx].post(c);
+}
+
+void Runtime::dump_state(cpu::Cpu& c, const std::string& path, const std::string& label) {
+    g_dump_path = path;
+    dump_memory(mem_, c, 0);
+    LOG("trace: (dump above: %s)", label.c_str());
+}
+
 std::vector<std::pair<std::string, uint64_t>> Runtime::hook_counts() const {
     std::vector<std::pair<std::string, uint64_t>> out;
     for (size_t i = 0; i < fn_hooks_.size(); ++i) out.push_back({fn_hook_names_[i], fn_hook_calls_[i]});
@@ -146,6 +236,24 @@ void Runtime::ensure_table() {
 void Runtime::dispatch(cpu::Cpu& c, int idx, cpu::Args& a) {
     ensure_table();
     if (counts_[idx]++ == 0) first_use_.push_back(idx);
+    if (!g_trace_checked) trace_open();
+    if (g_trace) {
+        if (g_trace_skip.size() <= size_t(idx)) g_trace_skip.resize(idx + 1, -1);
+        if (g_trace_skip[idx] < 0) g_trace_skip[idx] = inline_in_recomp(imports_.trap_name(idx)) ? 1 : 0;
+    }
+    if (g_trace && !g_trace_skip[idx]) {
+        if (g_trace_n == g_dump_at && g_dump_at) dump_memory(mem_, c, g_trace_n);
+        if (g_trace_n < g_trace_max) {
+            std::fprintf(g_trace, "%llu %s lr=%08x %08x %08x %08x %08x\n", (unsigned long long)g_trace_n,
+                         imports_.trap_name(idx).c_str(), c.reg(cpu::LR) & ~1u, a.raw(0), a.raw(1), a.raw(2), a.raw(3));
+            std::fflush(g_trace);  // a hung run gets killed: every line must already be on disk
+        } else if (g_trace_n == g_trace_max) {
+            std::fclose(g_trace);
+            g_trace = nullptr;
+            LOG("trace: %llu import calls written, trace closed", (unsigned long long)g_trace_max);
+        }
+        ++g_trace_n;
+    }
     cpu::Handler h = table_[idx];
     if (!h) {
         stubbed_[idx] = true;

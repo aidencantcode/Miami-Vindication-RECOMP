@@ -130,18 +130,45 @@ class Program:
         hi/ls -> N+1 entries, cs/cc -> N. Each literal loaded in the window is tried; a candidate
         is accepted when every target lands inside the function (and on an instruction)."""
         by_addr = {i.addr: n for n, i in enumerate(f.insns)}
+
+        def guard(w):
+            """Entry count from `cmp rX, #N` right before a hi/ls/cs/cc branch."""
+            if w.kind != "bcond" or w.cond not in (8, 9, 2, 3):
+                return None
+            j = by_addr.get(w.addr - 2)
+            prev = f.insns[j] if j is not None else None
+            if not (prev and prev.kind == "cmp_i"):
+                return None
+            return prev.imm + 1 if w.cond in (8, 9) else prev.imm
+
+        def no_fallthrough(w):
+            return (w.kind in ("b", "bx") or (w.kind == "hmov" and w.rd == 15)
+                    or (w.kind == "pop" and 15 in thumb.regs(w.rlist))
+                    or (w.kind == "bl" and f.addr < w.target < f.end))  # far jump
+
         for n, ins in enumerate(f.insns):
             if not (ins.kind == "hmov" and ins.rd == 15):
                 continue
             window = f.insns[max(0, n - 24):n]
             count = None
+            # The bound check on the path into the jump: walk back through the code that falls
+            # through into it (never across a b/bx/pop pc: code above those belongs to another
+            # path, e.g. a neighbouring switch). If the walk hits such a boundary first, the
+            # table block is only entered by branches, so use the guarded branch that targets it
+            # (`cmp r3, #12; bls table_block` elsewhere in the function).
+            block_start = ins.addr
             for w in reversed(window):
-                if w.kind == "bcond" and w.cond in (8, 9, 2, 3):
-                    j = by_addr.get(w.addr - 2)
-                    prev = f.insns[j] if j is not None else None
-                    if prev and prev.kind == "cmp_i":
-                        count = prev.imm + 1 if w.cond in (8, 9) else prev.imm
-                        break
+                if no_fallthrough(w):
+                    break
+                block_start = w.addr
+                count = guard(w)
+                if count is not None:
+                    break
+            if count is None:
+                into = [guard(w) for w in f.insns if w.kind == "bcond" and block_start <= w.target <= ins.addr]
+                into = [c for c in into if c is not None]
+                if into:
+                    count = max(into)
             found = None
             # nearest literals first; then (table address computed once and kept in a register or
             # on the stack) every literal of the function, but only with a known entry count

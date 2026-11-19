@@ -284,15 +284,29 @@ H(p_sysconf) {
 }
 
 // ---- time -------------------------------------------------------------------------------------
+bool fixed_time();
 H(t_time) {
-    uint32_t t = uint32_t(std::time(nullptr));
+    uint32_t t = fixed_time() ? 1300000000u : uint32_t(std::time(nullptr));
     uint32_t p = a.u32();
     if (p) M.w32(p, t);
     c.ret(t);
 }
 double g_time_scale = 1.0;
+// GANGSTAR_FIXED_TIME=1: deterministic clock for backend comparisons (tools/recomp/trace_diff.py):
+// every gettimeofday advances exactly 1 ms from a fixed start, time() is constant.
+bool fixed_time() {
+    static const bool on = [] {
+        const char* e = std::getenv("GANGSTAR_FIXED_TIME");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
 int64_t game_time_us() {
     using namespace std::chrono;
+    if (fixed_time()) {
+        static int64_t calls = 0;
+        return 1300000000LL * 1000000 + 1000 * calls++;
+    }
     static const int64_t wall0 = duration_cast<microseconds>(system_clock::now().time_since_epoch()).count();
     static auto last = steady_clock::now();
     static double virt_us = 0;

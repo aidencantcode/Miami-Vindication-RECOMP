@@ -90,6 +90,7 @@ int main(int argc, char** argv) {
         if (!std::strcmp(argv[i], "--profile-traps")) opt.profile_traps = true;
         else if (!std::strcmp(argv[i], "--no-vsync")) opt.no_vsync = true;
         else if (!std::strcmp(argv[i], "--no-mods")) opt.no_mods = true;
+        else if (!std::strcmp(argv[i], "--no-fastpath")) opt.no_fastpath = true;
         else if (!std::strcmp(argv[i], "--ff")) opt.fast_forward = true;
     for (int i = 1; i + 1 < argc; ++i) {
         if (!std::strcmp(argv[i], "--frames")) frames = opt.frames = std::atoi(argv[i + 1]);
@@ -100,6 +101,7 @@ int main(int argc, char** argv) {
         if (!std::strcmp(argv[i], "--dump-hud")) opt.dump_hud_at = std::atof(argv[i + 1]);
         if (!std::strcmp(argv[i], "--open-settings")) opt.open_settings_at = std::atof(argv[i + 1]);
         if (!std::strcmp(argv[i], "--set")) opt.set.push_back(argv[i + 1]);
+        if (!std::strcmp(argv[i], "--cpu")) opt.recomp = !std::strcmp(argv[i + 1], "recomp");
         if (!std::strcmp(argv[i], "--audio-dump")) opt.audio_dump = argv[i + 1];
         if (!std::strcmp(argv[i], "--touch-controls")) opt.touch_controls = argv[i + 1];
         if (!std::strcmp(argv[i], "--quality")) opt.quality = argv[i + 1];

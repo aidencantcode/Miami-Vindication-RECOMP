@@ -20,11 +20,13 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <unordered_map>
 #include <vector>
 #include <exception>
 #include <filesystem>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <string>
@@ -42,6 +44,7 @@
 #include "input/input.h"
 #include "jni/jni.h"
 #include "rt/runtime.h"
+#include "recomp/rc_runtime.h"
 #include "settings/settings.h"
 #include "ui/overlay.h"
 
@@ -137,7 +140,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     // ---- runtime ----------------------------------------------------------------------------------
     rt::Runtime rt;
     std::string err;
-    if (!rt.init(paths, &err)) FATAL("runtime init failed: %s", err.c_str());
+    if (!rt.init(paths, &err, /*fastpath=*/!opt.recomp && !opt.no_fastpath)) FATAL("runtime init failed: %s", err.c_str());
     hle::register_libc_core(rt);
     hle::register_libc_stdio(rt);
     gles1::register_handlers(rt);
@@ -145,6 +148,30 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     jni::install(rt);
     if (!opt.no_mods) mods::install(rt, cfg);
     else LOG("mods: disabled (--no-mods)");
+    if (const char* probe = std::getenv("GANGSTAR_PROBE")) {
+        // Backend comparison (tools/recomp/mem_diff.py): dump guest memory + registers at the N-th
+        // entry of a game function. Recomp mode needs that function generated with --probe.
+        const char* hit_env = std::getenv("GANGSTAR_PROBE_HIT");
+        const char* out_env = std::getenv("GANGSTAR_PROBE_OUT");
+        const uint64_t hit = hit_env ? std::strtoull(hit_env, nullptr, 10) : 0;
+        const std::string out = out_env ? out_env : (paths.root / "build" / "probe.mem").string();
+        const std::string name = probe;
+        const bool at_exit = std::getenv("GANGSTAR_PROBE_EXIT") != nullptr;  // dump when hit N returns
+        auto count = std::make_shared<uint64_t>(0);
+        rt::Runtime::FunctionHook h;
+        h.pre = [&rt, hit, out, name, count, at_exit](cpu::Cpu& c) {
+            const uint64_t n = ++*count;
+            if (n <= 20 || (n & (n - 1)) == 0) LOG("probe: %s hit %llu", name.c_str(), (unsigned long long)n);
+            if (n == hit && !at_exit) rt.dump_state(c, out, name + " hit " + std::to_string(n));
+            return false;
+        };
+        if (at_exit)
+            h.post = [&rt, hit, out, name, count](cpu::Cpu& c) {
+                if (*count == hit) rt.dump_state(c, out, name + " hit " + std::to_string(hit) + " (exit)");
+            };
+        rt.hook_function(name, std::move(h));
+        LOG("probe: %s armed (dump at hit %llu -> %s)", probe, (unsigned long long)hit, out.c_str());
+    }
     {  // audio: the Java GLMediaPlayer class on our mixer
         media::Config mc;
         mc.data_dir = paths.data;
@@ -170,6 +197,13 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     }
 
     cpu::Cpu& cpu = rt.main_cpu();
+    if (opt.recomp) {
+#ifdef GANGSTAR_HAVE_RECOMP
+        if (!recomp::bind(rt, cpu, &err)) FATAL("recomp: %s", err.c_str());
+#else
+        FATAL("--cpu recomp: this build has no recompiled code (configure with -DGANGSTAR_RECOMP=ON)");
+#endif
+    }
     int rc = 0;
     int frame = 0;
     try {

@@ -11,6 +11,8 @@
 
 #include "core/layout.h"
 #include "core/log.h"
+#define RC_INTERFACE_ONLY
+#include "recomp/rc.h"
 #include "rt/runtime.h"
 
 namespace cpu {
@@ -114,12 +116,20 @@ Cpu::~Cpu() {
 }
 
 uint32_t Cpu::reg(Reg r) const {
+    if (rc_) return r <= LR ? rc_->r[r] : r == CPSR ? 0x30u : 0u;  // recompiled: no PC, Thumb mode
     uint32_t v = 0;
     uc_reg_read(uc_, kUcReg[r], &v);
     return v;
 }
 
-void Cpu::set_reg(Reg r, uint32_t v) { uc_reg_write(uc_, kUcReg[r], &v); }
+void Cpu::set_reg(Reg r, uint32_t v) {
+    if (rc_) {
+        if (r <= LR) rc_->r[r] = v;
+        else if (r == PC) { rc_redirect_ = v; rc_has_redirect_ = true; }  // handled by rc_import
+        return;
+    }
+    uc_reg_write(uc_, kUcReg[r], &v);
+}
 
 void Cpu::ret_f(float v) {
     uint32_t b;
@@ -207,6 +217,35 @@ void Cpu::enable_block_profile(std::unordered_map<uint32_t, uint64_t>* counts) {
 }
 
 uint64_t Cpu::call(uint32_t addr, std::initializer_list<uint32_t> args, std::initializer_list<uint32_t> stack_args) {
+    if (rc_) {  // recompiled backend: a plain C call, registers saved/restored like the Unicorn path
+        if (!rc_call_) throw std::runtime_error("recompiled backend not bound (rc_runtime)");
+        const bool nested_rc = depth_ > 0;
+        uint32_t saved[16];
+        std::memcpy(saved, rc_->r, sizeof saved);
+        uint32_t sp = nested_rc ? ((rc_->r[13] - 256) & ~7u) : stack_top_ - 64;
+        if (stack_args.size()) {
+            sp -= (4 * uint32_t(stack_args.size()) + 7) & ~7u;
+            uint32_t p = sp;
+            for (uint32_t v : stack_args) rt_.mem().w32(p, v), p += 4;
+        }
+        rc_->r[13] = sp;
+        int i = 0;
+        for (uint32_t v : args) rc_->r[i++] = v;
+        for (; i < 4; ++i) rc_->r[i] = 0;
+        rc_->r[14] = 0;
+        ++depth_;
+        try {
+            rc_call_(rc_, addr);
+        } catch (...) {
+            --depth_;
+            std::memcpy(rc_->r, saved, sizeof saved);
+            throw;
+        }
+        --depth_;
+        const uint64_t result = rc_->r[0] | (uint64_t(rc_->r[1]) << 32);
+        std::memcpy(rc_->r, saved, sizeof saved);
+        return result;
+    }
     const bool nested = depth_ > 0;
     uc_context* ctx = nullptr;
     if (nested) {

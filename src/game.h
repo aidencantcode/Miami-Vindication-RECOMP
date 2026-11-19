@@ -24,6 +24,8 @@ struct RunOptions {
     std::vector<std::string> set;    // settings overrides "section.key=value" (--set, repeatable)
     std::string audio_dump;          // write the mixed audio output to this WAV file at exit
     bool fast_forward = false;       // start with fast forward on (tests)
+    bool recomp = false;             // --cpu recomp: run the recompiled code instead of Unicorn
+    bool no_fastpath = false;        // --no-fastpath: Unicorn without the guest VFP helpers (same traps as recomp)
 };
 
 int run_game(const rt::Paths& paths, const RunOptions& opt);
