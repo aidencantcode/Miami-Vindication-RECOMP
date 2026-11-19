@@ -50,6 +50,11 @@ using Clock = std::chrono::steady_clock;
 
 namespace {
 
+gles1::TextureFilter filter_of(const std::string& s) {
+    return s == "nearest" ? gles1::TextureFilter::Nearest : s == "bilinear" ? gles1::TextureFilter::Bilinear
+         : s == "trilinear" ? gles1::TextureFilter::Trilinear : gles1::TextureFilter::Game;
+}
+
 gles1::Fit fit_of(const std::string& s) {
     return s == "stretch" ? gles1::Fit::Stretch : s == "integer" ? gles1::Fit::Integer : gles1::Fit::Aspect;
 }
@@ -126,6 +131,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     LOG("display: window %dx%d (%s), game %dx%d rendered at x%d, msaa %d", dw, dh, cfg.window_mode.c_str(), kW, kH,
         vc.scale, vc.msaa);
     gles1::set_anisotropy(cfg.anisotropy);
+    gles1::set_texture_filter(filter_of(cfg.texture_filter));
     ui::init(win, ctx);
 
     // ---- runtime ----------------------------------------------------------------------------------
@@ -392,6 +398,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                         if (!gles1::vfb_reconfigure(scale, cfg.msaa)) ui::toast("That anti-aliasing level is not supported");
                     }
                     if (cfg.anisotropy != before.anisotropy) gles1::set_anisotropy(cfg.anisotropy);
+                    if (cfg.texture_filter != before.texture_filter) gles1::set_texture_filter(filter_of(cfg.texture_filter));
                     apply_audio_volumes(cfg);
                     if (fast_forward) {  // speed changed in the menu
                         stats.fast_forward = std::clamp(cfg.fast_forward_speed, 2, 8);

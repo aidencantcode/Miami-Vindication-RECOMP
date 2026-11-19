@@ -211,8 +211,11 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
             restart_note();
             ch |= ImGui::Checkbox("Mipmaps", &s.mipmaps);
             restart_note();
+            ch |= combo_str("Texture filtering", &s.texture_filter,
+                            {{"game", "Game default"}, {"nearest", "Nearest (pixelated)"}, {"bilinear", "Bilinear"},
+                             {"trilinear", "Trilinear (smoothest)"}});
             ch |= combo_int("Anisotropic filtering", &s.anisotropy, {{1, "Off"}, {2, "2x"}, {4, "4x"}, {8, "8x"}, {16, "16x"}});
-            ImGui::TextDisabled("Applies to textures as they load.");
+            ImGui::TextDisabled("Filtering changes apply immediately.");
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Audio")) {

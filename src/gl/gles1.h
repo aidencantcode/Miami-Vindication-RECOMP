@@ -33,6 +33,10 @@ bool vfb_reconfigure(int scale, int msaa);  // live change of scale and MSAA (fa
 // Anisotropic filtering for mipmapped textures (applied when the game sets a texture's
 // minification filter, i.e. as textures load). 1 = off.
 void set_anisotropy(int level);
+
+// Texture filtering override (applied live to every texture whose filters the game set).
+enum class TextureFilter { Game, Nearest, Bilinear, Trilinear };
+void set_texture_filter(TextureFilter f);
 const VfbConfig& vfb_config();
 enum class Fit { Aspect, Stretch, Integer };
 // Copy the game image into the window (w x h); returns the rectangle used (for input mapping).

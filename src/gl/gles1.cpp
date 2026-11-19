@@ -301,23 +301,83 @@ H(unmap_buffer) {
 }
 
 // ---- textures -----------------------------------------------------------------------------------------
-H(gen_textures) { GLsizei n = a.s32(); glGenTextures(n, static_cast<GLuint*>(const_cast<void*>(host(c, a.u32())))); }
-H(delete_textures) { GLsizei n = a.s32(); glDeleteTextures(n, static_cast<const GLuint*>(host(c, a.u32()))); }
-H(bind_texture) { GLenum t = a.u32(); glBindTexture(t, a.u32()); }
-H(active_texture) { p_glActiveTexture(a.u32()); }
-// Setting a mipmapped minification filter also sets the user's anisotropic filtering level.
-void apply_aniso(GLenum target, GLenum pname, GLint filter) {
-    if (pname != GL_TEXTURE_MIN_FILTER) return;
-    const bool mip = filter == GL_NEAREST_MIPMAP_NEAREST || filter == GL_LINEAR_MIPMAP_NEAREST ||
-                     filter == GL_NEAREST_MIPMAP_LINEAR || filter == GL_LINEAR_MIPMAP_LINEAR;
-    glTexParameterf(target, 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY */, mip ? g_aniso : 1.0f);
+// Texture filtering override. We remember the filters the GAME asked for per texture and apply the
+// user's mode on top: the game's mip / no-mip choice is kept (a mipmapped filter on a texture
+// without mipmaps would make it render black), only nearest / linear sampling changes.
+struct TexFilters { GLint min = GL_NEAREST_MIPMAP_LINEAR, mag = GL_LINEAR; };
+std::unordered_map<GLuint, TexFilters> g_tex_filters;  // textures whose filters the game set
+TextureFilter g_filter_mode = TextureFilter::Game;
+GLuint g_bound_2d[8] = {};                              // GL_TEXTURE_2D binding per texture unit
+int g_unit = 0;
+
+bool is_mip(GLint f) {
+    return f == GL_NEAREST_MIPMAP_NEAREST || f == GL_LINEAR_MIPMAP_NEAREST || f == GL_NEAREST_MIPMAP_LINEAR ||
+           f == GL_LINEAR_MIPMAP_LINEAR;
 }
-H(tex_parameteri) { GLenum t = a.u32(), p = a.u32(); GLint v = a.s32(); glTexParameteri(t, p, v); apply_aniso(t, p, v); }
+GLint effective_min(GLint f) {
+    switch (g_filter_mode) {
+        case TextureFilter::Nearest: return is_mip(f) ? GL_NEAREST_MIPMAP_NEAREST : GL_NEAREST;
+        case TextureFilter::Bilinear: return is_mip(f) ? GL_LINEAR_MIPMAP_NEAREST : GL_LINEAR;
+        case TextureFilter::Trilinear: return is_mip(f) ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR;
+        default: return f;
+    }
+}
+GLint effective_mag(GLint f) {
+    if (g_filter_mode == TextureFilter::Game) return f;
+    return g_filter_mode == TextureFilter::Nearest ? GL_NEAREST : GL_LINEAR;
+}
+// Applies filters + anisotropy (mipmapped, non-nearest textures only) to the bound 2D texture.
+void apply_filters(GLenum target, const TexFilters& t) {
+    glTexParameteri(target, GL_TEXTURE_MIN_FILTER, effective_min(t.min));
+    glTexParameteri(target, GL_TEXTURE_MAG_FILTER, effective_mag(t.mag));
+    const bool aniso = is_mip(t.min) && g_filter_mode != TextureFilter::Nearest;
+    glTexParameterf(target, 0x84FE /* GL_TEXTURE_MAX_ANISOTROPY */, aniso ? g_aniso : 1.0f);
+}
+void reapply_all_filters() {
+    for (const auto& [id, f] : g_tex_filters) {
+        glBindTexture(GL_TEXTURE_2D, id);
+        apply_filters(GL_TEXTURE_2D, f);
+    }
+    glBindTexture(GL_TEXTURE_2D, g_bound_2d[g_unit]);
+}
+
+H(gen_textures) { GLsizei n = a.s32(); glGenTextures(n, static_cast<GLuint*>(const_cast<void*>(host(c, a.u32())))); }
+H(delete_textures) {
+    GLsizei n = a.s32();
+    const GLuint* ids = static_cast<const GLuint*>(host(c, a.u32()));
+    for (GLsizei i = 0; i < n; ++i) {
+        g_tex_filters.erase(ids[i]);
+        for (GLuint& b : g_bound_2d)
+            if (b == ids[i]) b = 0;
+    }
+    glDeleteTextures(n, ids);
+}
+H(bind_texture) {
+    GLenum t = a.u32();
+    GLuint id = a.u32();
+    if (t == GL_TEXTURE_2D) g_bound_2d[g_unit] = id;
+    glBindTexture(t, id);
+}
+H(active_texture) {
+    GLenum u = a.u32();
+    g_unit = std::clamp(int(u) - int(GL_TEXTURE0), 0, 7);
+    p_glActiveTexture(u);
+}
+void tex_param(GLenum t, GLenum p, GLint v) {
+    if (t == GL_TEXTURE_2D && (p == GL_TEXTURE_MIN_FILTER || p == GL_TEXTURE_MAG_FILTER)) {
+        TexFilters& f = g_tex_filters[g_bound_2d[g_unit]];
+        (p == GL_TEXTURE_MIN_FILTER ? f.min : f.mag) = v;
+        apply_filters(t, f);
+        return;
+    }
+    glTexParameteri(t, p, v);
+}
+H(tex_parameteri) { GLenum t = a.u32(), p = a.u32(); GLint v = a.s32(); tex_param(t, p, v); }
 H(tex_parameterf) {
     GLenum t = a.u32(), p = a.u32();
     float v = a.f32();
-    glTexParameterf(t, p, v);
-    apply_aniso(t, p, GLint(v));
+    if (p == GL_TEXTURE_MIN_FILTER || p == GL_TEXTURE_MAG_FILTER) tex_param(t, p, GLint(v));
+    else glTexParameterf(t, p, v);
 }
 H(tex_image_2d) {
     GLenum t = a.u32(); GLint l = a.s32(), ifmt = a.s32(); GLsizei w = a.s32(), h = a.s32(); GLint b = a.s32();
@@ -471,6 +531,13 @@ void set_anisotropy(int level) {
     GLfloat max_a = 1;
     glGetFloatv(0x84FF /* GL_MAX_TEXTURE_MAX_ANISOTROPY */, &max_a);
     g_aniso = std::clamp(float(level), 1.0f, std::max(1.0f, max_a));
+    reapply_all_filters();
+}
+
+void set_texture_filter(TextureFilter f) {
+    if (f == g_filter_mode) return;
+    g_filter_mode = f;
+    reapply_all_filters();
 }
 
 const VfbConfig& vfb_config() { return g_cfg; }
