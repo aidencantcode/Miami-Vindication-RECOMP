@@ -370,6 +370,8 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 game_ms += ms;
                 stat_game_ms += ms;
             }
+            // Mouse-look: cursor locked only while playing (not in the settings menu or unfocused).
+            in.update_mouse_lock(!ui::is_open() && (SDL_GetWindowFlags(win) & SDL_WINDOW_INPUT_FOCUS) != 0);
 
             // present the game image into the window
             SDL_GL_GetDrawableSize(win, &dw, &dh);

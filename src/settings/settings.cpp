@@ -62,6 +62,7 @@ const std::vector<Field>& fields() {
         F("controls", "touch_controls", &Settings::touch_controls),
         F("controls", "mouse_sensitivity", &Settings::mouse_sensitivity),
         F("controls", "invert_camera_y", &Settings::invert_camera_y),
+        F("controls", "mouse_look", &Settings::mouse_look),
         F("controls", "stick_deadzone", &Settings::stick_deadzone),
         F("audio", "master_volume", &Settings::master_volume),
         F("audio", "music_volume", &Settings::music_volume),

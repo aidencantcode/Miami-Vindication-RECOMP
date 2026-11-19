@@ -235,6 +235,10 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
                             {{"auto", "Auto (hide while a controller or keyboard plays)"}, {"show", "Always show"},
                              {"hide", "Always hide"}});
             ch |= ImGui::SliderFloat("Camera speed", &s.mouse_sensitivity, 0.1f, 5.0f, "%.2f");
+            ch |= ImGui::Checkbox("Mouse look (lock the cursor while playing)", &s.mouse_look);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("The mouse turns the camera and left click attacks. The cursor is released\n"
+                                  "in menus, the map, cutscenes, this menu and when you switch windows.");
             ch |= ImGui::Checkbox("Invert camera Y", &s.invert_camera_y);
             ch |= ImGui::SliderFloat("Stick deadzone", &s.stick_deadzone, 0.0f, 0.6f, "%.2f");
             ImGui::Separator();
@@ -245,8 +249,8 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
                 ImGui::TableHeadersRow();
                 static const char* rows[][3] = {
                     {"Move / steer", "Left stick", "WASD / arrows"},
-                    {"Camera", "Right stick", "Right mouse drag"},
-                    {"Attack", "RT (B in a car)", "Space / Left Ctrl"},
+                    {"Camera", "Right stick", "Mouse (mouse look), else right-drag"},
+                    {"Attack", "RT (B in a car)", "Left click (mouse look), Space, Left Ctrl"},
                     {"Accelerate / brake", "RT / LT", "W / S"},
                     {"Sprint", "A", "Shift"},
                     {"Cover", "LT / B", "Q"},

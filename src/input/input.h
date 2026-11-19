@@ -68,6 +68,10 @@ public:
     void apply_settings(const settings::Settings& s);  // live: deadzone, camera speed, invert Y
     void release_all();      // lift every virtual touch / key (e.g. when the settings menu opens)
     void suppress_held();    // ignore keys/buttons already held until they are released
+    // Mouse-look: lock the cursor (SDL relative mode) when allowed (window focused, settings
+    // menu closed), playing with keyboard+mouse and the gameplay HUD is up. Call every frame.
+    void update_mouse_lock(bool allowed);
+    bool mouse_locked() const { return mouse_locked_; }
 
     Device last_device() const { return last_device_; }
     // Menu cursor (game coordinates) for the overlay; visible while a pad drives menus.
@@ -113,6 +117,7 @@ private:
     float cursor_x_ = 0, cursor_y_ = 0;
     bool prev_back_ = false, prev_menu_ = false;
     bool suppress_ = false;
+    bool mouse_look_ = true, mouse_locked_ = false, lmb_attack_ = false;
 
     struct Step { int frame; double time; std::string cmd; std::string a; int x, y; bool done; };
     std::vector<Step> script_;

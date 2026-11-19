@@ -74,6 +74,7 @@ void Input::init(const GameCalls& g, int game_w, int game_h, const settings::Set
     game_w_ = game_w;
     game_h_ = game_h;
     deadzone_ = std::clamp(s.stick_deadzone, 0.0f, 0.9f);
+    mouse_look_ = s.mouse_look;
     mouse_sens_ = std::clamp(s.mouse_sensitivity, 0.05f, 10.0f);
     invert_y_ = s.invert_camera_y;
     set_viewport(0, 0, game_w, game_h);
@@ -86,6 +87,7 @@ void Input::init(const GameCalls& g, int game_w, int game_h, const settings::Set
 
 void Input::apply_settings(const settings::Settings& s) {
     deadzone_ = std::clamp(s.stick_deadzone, 0.0f, 0.9f);
+    mouse_look_ = s.mouse_look;
     mouse_sens_ = std::clamp(s.mouse_sensitivity, 0.05f, 10.0f);
     invert_y_ = s.invert_camera_y;
 }
@@ -111,6 +113,26 @@ void Input::release_all() {
 }
 
 void Input::suppress_held() { suppress_ = true; }
+
+void Input::update_mouse_lock(bool allowed) {
+    // Locked while playing with keyboard+mouse in gameplay; released in menus/cutscenes, the
+    // settings menu and when the window isn't focused (SDL relative mode hides and confines the
+    // cursor and reports raw motion).
+    const bool want = mouse_look_ && allowed && gameplay_ && last_device_ != Device::Pad;
+    if (want == mouse_locked_) return;
+    if (!want && mouse_locked_ && lmb_attack_) lmb_attack_ = false;
+    mouse_locked_ = want;
+    SDL_SetRelativeMouseMode(want ? SDL_TRUE : SDL_FALSE);
+    if (want) {
+        if (mouse_down_) {  // a click-drag that started as a touch: lift it
+            touch(0, vt_[P_MOUSE].x, vt_[P_MOUSE].y, P_MOUSE);
+            mouse_down_ = false;
+        }
+        rmb_down_ = false;
+        rmb_dx_ = rmb_dy_ = 0;
+    }
+    LOG("input: mouse %s", want ? "locked (mouse-look)" : "released");
+}
 
 void Input::set_viewport(int x, int y, int w, int h) {
     vp_x_ = x; vp_y_ = y; vp_w_ = w; vp_h_ = h;
@@ -163,6 +185,20 @@ void Input::key_edge(int code, bool now, bool* prev) {
 // ---- events --------------------------------------------------------------------------------------
 void Input::handle(const SDL_Event& ev) {
     int gx, gy;
+    if (mouse_locked_) {  // mouse-look: motion turns the camera, left click attacks
+        switch (ev.type) {
+            case SDL_MOUSEMOTION:
+                rmb_dx_ += float(ev.motion.xrel) * game_w_ / std::max(vp_w_, 1);
+                rmb_dy_ += float(ev.motion.yrel) * game_h_ / std::max(vp_h_, 1);
+                return;
+            case SDL_MOUSEBUTTONDOWN:
+            case SDL_MOUSEBUTTONUP:
+                if (ev.button.button == SDL_BUTTON_LEFT) lmb_attack_ = ev.type == SDL_MOUSEBUTTONDOWN;
+                last_device_ = Device::Keyboard;
+                return;
+            default: break;
+        }
+    }
     switch (ev.type) {
         case SDL_MOUSEBUTTONDOWN:
             if (ev.button.button == SDL_BUTTON_LEFT && to_game(ev.button.x, ev.button.y, &gx, &gy)) {
@@ -275,7 +311,7 @@ GameInput Input::gather() {
     gi.act[A_BACK] = pb(SDL_CONTROLLER_BUTTON_START) || (!gameplay_ && pb(SDL_CONTROLLER_BUTTON_B));
 
     // keyboard
-    gi.act[A_ATTACK] |= k(SDL_SCANCODE_SPACE) || k(SDL_SCANCODE_LCTRL);
+    gi.act[A_ATTACK] |= k(SDL_SCANCODE_SPACE) || k(SDL_SCANCODE_LCTRL) || lmb_attack_;
     gi.act[A_SPRINT] |= k(SDL_SCANCODE_LSHIFT) || k(SDL_SCANCODE_RSHIFT);
     gi.act[A_ENTER_CAR] |= k(SDL_SCANCODE_F);
     gi.act[A_INTERACT] |= k(SDL_SCANCODE_E);
@@ -387,7 +423,7 @@ void Input::drive_gameplay(const std::vector<mods::Control>& controls, const Gam
     // camera: a continuous drag on empty screen space that re-grabs before it reaches a control
     const float speed = 700.0f * mouse_sens_;  // game pixels per second at full deflection
     const float dx = float(gi.cx * speed * dt) + rmb_dx_ * mouse_sens_;
-    const float dy = float(gi.cy * speed * dt) + rmb_dy_ * mouse_sens_;
+    const float dy = float(gi.cy * speed * dt) + (invert_y_ ? -rmb_dy_ : rmb_dy_) * mouse_sens_;
     rmb_dx_ = rmb_dy_ = 0;
     const float ax = game_w_ * 0.62f, ay = game_h_ * 0.40f;  // anchor: right of center, above the buttons
     if (dx != 0 || dy != 0 || (rmb_down_ && vt_[P_CAMERA].down)) {

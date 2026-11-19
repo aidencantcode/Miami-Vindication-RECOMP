@@ -30,6 +30,7 @@ struct Settings {
     std::string touch_controls = "auto";    // auto (hide while a pad/keyboard drives) | show | hide
     float mouse_sensitivity = 1.0f;
     bool invert_camera_y = false;
+    bool mouse_look = true;                 // lock the cursor in gameplay; the mouse turns the camera, left click attacks
     float stick_deadzone = 0.2f;
 
     // [audio]
