@@ -54,6 +54,7 @@ const std::vector<Field>& fields() {
         F("display", "fit", &Settings::fit),
         F("display", "smooth_scaling", &Settings::smooth_scaling),
         F("display", "show_fps", &Settings::show_fps),
+        F("display", "low_latency", &Settings::low_latency),
         F("graphics", "quality", &Settings::quality),
         F("graphics", "mipmaps", &Settings::mipmaps),
         F("graphics", "draw_distance", &Settings::draw_distance),

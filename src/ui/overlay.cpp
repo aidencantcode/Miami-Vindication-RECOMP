@@ -200,6 +200,10 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
                              {"16:10", "16:10"}, {"16:9", "16:9"}, {"21:9", "21:9"}});
             restart_note();
             ch |= ImGui::Checkbox("Show FPS", &s.show_fps);
+            ch |= ImGui::Checkbox("Low latency mode", &s.low_latency);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Waits for the GPU after every frame so frames never queue up in the driver.\n"
+                                  "For the lowest delay also turn VSync off.");
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Graphics")) {
@@ -411,7 +415,9 @@ bool draw(settings::Settings& cfg, const FrameStats& st) {
         ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 8, vp->WorkPos.y + 8), ImGuiCond_Always, ImVec2(1, 0));
         ImGui::SetNextWindowBgAlpha(0.45f);
         ImGui::Begin("##fps", nullptr, passive);
-        ImGui::Text("%.0f fps  %.1f ms", st.fps, st.fps > 0 ? 1000.0 / st.fps : 0.0);
+        ImGui::Text("%.0f fps  %.1f ms frame  game %.1f ms", st.fps, st.fps > 0 ? 1000.0 / st.fps : 0.0, st.game_ms);
+        if (st.input_latency_ms > 0) ImGui::Text("input to screen %.0f ms", st.input_latency_ms);
+        else ImGui::TextDisabled("input to screen -");
         ImGui::End();
     }
     if (st.fast_forward) {  // always visible while fast forward is on

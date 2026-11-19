@@ -239,6 +239,9 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
         auto last_report = Clock::now(), frame_start = Clock::now(), prev_frame_start = Clock::now();
         int frames_since = 0;
         auto next_deadline = Clock::now();  // frame limiter
+        Uint32 input_ticks = 0;             // SDL time of the newest input event this frame
+        double lat_sum = 0;                 // input latency samples since the last stats update
+        int lat_n = 0;
         auto stat_start = Clock::now();  // overlay statistics, refreshed every 0.5 s
         int stat_frames = 0;
         double stat_game_ms = 0;
@@ -313,6 +316,9 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                     }
                 }
                 if (ui::handle_event(ev)) continue;  // the settings menu has the input
+                if (ev.type == SDL_KEYDOWN || ev.type == SDL_MOUSEMOTION || ev.type == SDL_MOUSEBUTTONDOWN ||
+                    ev.type == SDL_CONTROLLERBUTTONDOWN || ev.type == SDL_CONTROLLERAXISMOTION)
+                    input_ticks = std::max(input_ticks, ev.common.timestamp);
                 in.handle(ev);
             }
             const double since_start = std::chrono::duration<double>(Clock::now() - loop_start).count();
@@ -420,6 +426,12 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 gles1::screenshot((shot_dir / name).string().c_str(), dw, dh);
             }
             SDL_GL_SwapWindow(win);
+            if (cfg.low_latency) glFinish();  // no queued frames: what was just drawn is what is shown
+            if (input_ticks) {  // input-to-present latency of the newest input this frame
+                lat_sum += double(SDL_GetTicks() - input_ticks);
+                ++lat_n;
+                input_ticks = 0;
+            }
             gles1::vfb_restore_binding();
 
             int fps_limit = cfg.fps_limit;
@@ -448,6 +460,9 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
             if (const double sdt = std::chrono::duration<double>(Clock::now() - stat_start).count(); sdt >= 0.5) {
                 stats.fps = stat_frames / sdt;
                 stats.game_ms = stat_frames ? stat_game_ms / stat_frames : 0.0;
+                stats.input_latency_ms = lat_n ? lat_sum / lat_n : 0.0;
+                lat_sum = 0;
+                lat_n = 0;
                 stat_frames = 0;
                 stat_game_ms = 0;
                 stat_start = Clock::now();

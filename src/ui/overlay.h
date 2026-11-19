@@ -19,6 +19,7 @@ struct FrameStats {
     int render_w = 0, render_h = 0;  // internal resolution
     int game_w = 0, game_h = 0;      // what the game is told
     int fast_forward = 0;            // current fast-forward speed (0 = off)
+    double input_latency_ms = 0;     // input event -> frame presented (average; 0 = no input lately)
 };
 
 bool init(SDL_Window* win, SDL_GLContext ctx);

@@ -18,6 +18,7 @@ struct Settings {
     std::string fit = "aspect";             // aspect | stretch | integer
     bool smooth_scaling = true;             // linear filter when scaling to the window
     bool show_fps = false;
+    bool low_latency = true;                // wait for the GPU after each frame so frames never queue up
 
     // [graphics]
     std::string quality = "high";           // phone (exactly as on the device) | low | high | ultra (more NPCs)
