@@ -102,6 +102,33 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
                            "_ZNK5Wheel6draw2dEv"})
         rt.hook_function(fn, {[](cpu::Cpu& c) { return g_hidden && is_control(c.reg(cpu::R0)); }, nullptr});
 
+    // ---- main menu: remove the dead Gameloft store buttons -----------------------------------------
+    // Widgets::MainMenu is the Flash movie "widgetMainMenu"; its buttons btnGLLive (event 3 ->
+    // Gameloft LIVE!) and btnMore (event 4 -> More Games / IGP) lead to services that no longer exist.
+    // The game itself hides widgetMainMenu.btnTwitter the same way (RenderFX::SetVisible(path, false)).
+    if (s.hide_store_buttons) {
+        rt.hook_function("_ZN5Menus8MainMenu8GotFocusEv", {nullptr, [](cpu::Cpu& c) {
+            auto& r = c.rt();
+            static uint32_t paths[2] = {};
+            if (!paths[0]) {
+                const char* names[2] = {"widgetMainMenu.btnGLLive", "widgetMainMenu.btnMore"};
+                for (int i = 0; i < 2; ++i) {
+                    paths[i] = r.heap().alloc(uint32_t(std::strlen(names[i]) + 1));
+                    r.mem().write(paths[i], names[i], uint32_t(std::strlen(names[i]) + 1));
+                }
+            }
+            const uint32_t mgr = uint32_t(c.call(r.lib_func("_ZN11MenuManager11getInstanceEv")));
+            const uint32_t fx = r.mem().r32(mgr + 0xb4);  // MenuManager's RenderFX (see MenuWidget ctor)
+            for (uint32_t p : paths) c.call(r.lib_func("_ZN8RenderFX10SetVisibleEPKcb"), {fx, p, 0});
+        }});
+        rt.hook_function("_ZN5Menus8MainMenu6NotifyEPK10MenuWidgeti", {[](cpu::Cpu& c) {
+            const uint32_t ev = c.reg(cpu::R2);
+            if (ev != 3 && ev != 4) return false;
+            c.set_reg(cpu::R0, 0);  // ignore a click that still reaches them
+            return true;
+        }, nullptr});
+    }
+
     // ---- virtual steering (tilt mode) -------------------------------------------------------------
     rt.hook_function("_ZN21DrivingControlHandler18handleAccelerationEPK14EvAcceleration", {[](cpu::Cpu& c) {
         if (!g_steer_on) return false;  // real accelerometer: the game's own code

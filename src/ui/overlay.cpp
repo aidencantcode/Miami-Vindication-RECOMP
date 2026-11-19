@@ -266,6 +266,8 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
         }
         if (ImGui::BeginTabItem("Game")) {
             ch |= ImGui::Checkbox("Pause when the window loses focus", &s.pause_when_unfocused);
+            ch |= ImGui::Checkbox("Hide the Gameloft LIVE! and More Games! buttons", &s.hide_store_buttons);
+            restart_note();
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();

@@ -67,7 +67,10 @@ void Runtime::post_hook_trap(cpu::Cpu& c, cpu::Args&) {
     int idx;
     if (!c.pop_post(&lr, &idx)) FATAL("post-hook trap reached with an empty return stack");
     if (c.rt().fn_hooks_[idx].post) c.rt().fn_hooks_[idx].post(c);
-    c.redirect(lr);  // back to the original caller
+    // Back to the original caller through the trap stub's own "bx lr" (LR is dead after a return).
+    // Writing PC from the hook instead breaks when the post hook made nested guest calls: Unicorn
+    // then stops the outer emulation ("did not return").
+    c.set_reg(cpu::LR, lr);
 }
 
 void Runtime::hook_function(const std::string& symbol, FunctionHook h) {

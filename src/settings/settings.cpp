@@ -69,6 +69,7 @@ const std::vector<Field>& fields() {
         F("audio", "restore_missing_sounds", &Settings::restore_missing_sounds),
         F("game", "skip_intro", &Settings::skip_intro),
         F("game", "pause_when_unfocused", &Settings::pause_when_unfocused),
+        F("game", "hide_store_buttons", &Settings::hide_store_buttons),
     };
     return f;
 }
