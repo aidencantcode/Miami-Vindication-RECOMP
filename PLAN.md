@@ -214,13 +214,54 @@ Each step is small, committed separately, and verified with screenshots + the ru
 
 ## ⬜ Later phases (tentative; refine after Phase 3)
 
-**Phase 4: Static recompiler (approach B).** Python tool: symbols + mapping symbols →
-one C function per ARM/Thumb function; CPU-state struct; indirect calls through an
-address→function table; recovered jump tables; ARM↔Thumb interworking; `setjmp/longjmp`.
-Differential testing against the Phase 1/2 emulator per function. Swap the CPU backend
-⇒ the game runs as native x86-64 code. Soft-float helper calls become host float ops
-(~55% of executed instructions today are float-call overhead). **Exit criterion now includes
-120+ fps in gameplay on the dev PC** (Ryzen 5 5500 / RTX 3060).
+## 🟡 Phase 4: Static recompiler (approach B) (started 2026-11-19, owner chose it over dynarmic)
+
+Goal: the game's ARM code translated ahead of time into C, compiled natively (x86-64 now, arm64 for
+Android in Phase 5), running on the existing shim layer (HLE libc, JNI, GL bridge, audio, input,
+mods). **Exit criterion: gameplay at 120+ fps on the dev PC** (Ryzen 5 5500 / RTX 3060).
+
+Design (details and reasons in NOTES.md §11 once written):
+- **Decoder:** our own exact decoder, in Python (`tools/recomp/`). The code is Thumb-1 (ARMv5T,
+  19 instruction formats) plus ~3k ARM instructions (mostly `ldr ip,=x; bx ip` stubs and the PLT).
+  Mapping symbols label every code/data boundary.
+- **One C function per guest function** (`.symtab` names). Basic blocks become labels + `goto`.
+  `bl` to a known function is a direct C call. A branch into another function becomes a tail call.
+  The 227 `mov pc, reg` jump tables are recovered into `switch` statements. Other indirect jumps,
+  `blx reg` and vtable calls go through an address → function table.
+- **CPU state:** a struct (r0-r15 + memory base) passed to every function. NZCV flags are C locals
+  (AAPCS doesn't keep flags across calls), so the C compiler drops dead flag computations. Guest
+  memory stays "fastmem": guest address + host base, as today.
+- **Imports:** a call through the PLT becomes a direct host call: memcpy is host memcpy, and the GL
+  bridge, JNI and libc handlers are called straight from the generated code. **The soft-float
+  helpers become plain C float operations**, which removes the ~55% float-call overhead.
+- **Literal pools** are constants: there are no relocations in the code segment, so they are folded
+  at translation time.
+- Generated C goes to `work/recomp/` (git-ignored: it is derived from the game's code). Only the
+  translator is committed.
+- **Verification:** per-function differential tests against Unicorn (random registers and memory,
+  compare results), then whole-game differential traces (sequence of import calls and their
+  arguments, Unicorn backend vs recompiled backend) until boot and gameplay match.
+
+Milestones (each one or more commits, each with a pass/fail check):
+- **4.1 Survey.** Functions and code ranges from `.symtab` + mapping symbols. Decode everything.
+  Per-function CFG: branch targets, calls, returns, tail calls, cross-function branches, extra entry
+  points, jump tables, other indirect branches. Instruction histogram. Report in
+  `analysis/recomp_survey.md`. ✔ when 100% of code decodes and every `mov pc, reg` is explained.
+- **4.2 Code generator v0.** C for every Thumb/ARM form the survey finds, plus the runtime header
+  (state struct, memory access, flag helpers, dispatch table). Build the generated C in a test target.
+  ✔ when all of it compiles.
+- **4.3 Differential unit tests.** Harness: run leaf functions (then functions with stubbed callees)
+  under Unicorn and as compiled C on the same random inputs, compare registers + memory.
+  ✔ when thousands of functions match bit-exactly.
+- **4.4 Runtime backend.** The CPU interface used by HLE/JNI/mods works on both backends;
+  `--cpu recomp`; import calls bind to handlers; function hooks become checks at generated function
+  entries; trace-compare mode. ✔ when boot reaches the title screen with an identical import trace
+  up to it.
+- **4.5 Gameplay.** Menus, intro, gameplay, driving; fix divergences found by trace comparison.
+  ✔ when the scripted test runs match the Unicorn build (screenshots, audio).
+- **4.6 Performance.** Registers cached in locals, inlined float helpers, cheap dispatch, PGO/LTO.
+  Measure with `tools/bench.ps1`. ✔ at 120+ fps in gameplay.
+- **4.7 Cleanup.** Unicorn stays as the reference/debug backend (`--cpu unicorn`). Notes and docs.
 
 **Phase 5: Android arm64 handhelds (main target after Phase 4).** Same generated C + shim layer,
 built for arm64 with SDL2 for Android; GLES 3 backend for the GL bridge; settings UI usable with a
