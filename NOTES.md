@@ -724,3 +724,22 @@ None of this applies to a PC port: we replace the whole Android/Java layer ourse
   (freeform / first person) are not done yet.
 - Next: camera modes (find where the yaw offset decays back to 0; first person via FPSCamera or
   a head-mounted FollowCamera), radio frame, dynarmic evaluation (time-boxed), Phase 4.
+- Later in the run: **camera modes done** (commit 4545975). Mechanics: FollowCamera position
+  +0x08, look-at +0x14. updateAngles writes per-frame yaw/pitch deltas (+0x34/+0x38), and
+  updatePosition rotates the camera around the target by them and zeroes them.
+  FollowCamera::update pulls the camera behind the character (the auto-centering).
+  - Freeform keeps the camera's offset from its look-at across that update.
+  - First person moves the scene camera node (vfuncs +0xA4 setPosition / +0x104 setTarget) to the
+    look-at point after CameraManager::update.
+  - Verified with screenshots (strafing: the classic heading swings, freeform holds; first person
+    view at head height). Debug aid: `GS_WATCH_CAMERA=1` + `Cpu::watch_writes` logs guest code that
+    writes a memory range.
+  - Not yet: first person while driving, hiding the player's own body when looking down,
+    freeform for the vehicle camera.
+- **dynarmic assessment**: not in vcpkg; it needs its own deps (mcl, xbyak, zydis, fmt, boost
+  headers). The runtime depends on Unicorn-specific features (nested guest calls from HLE
+  handlers, UC_HOOK_CODE function hooks, context save/restore, shared mem mapping), so a dynarmic
+  backend means a CPU-backend abstraction plus a re-entrancy scheme: several sessions, and it
+  partly duplicates Phase 4 (the recompiler, also the Android path). **Owner decision:** go
+  straight to Phase 4 (recommended), or do dynarmic first as a stopgap for a faster emulated build.
+- Regression check after everything: still ~49-50 ms/frame at the spawn (same as before).

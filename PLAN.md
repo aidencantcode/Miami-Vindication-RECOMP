@@ -189,8 +189,9 @@ Each step is small, committed separately, and verified with screenshots + the ru
   are read at boot, so the main menu offers CONTINUE across runs. Packaging moves them to a per-platform user
   folder (Windows: %APPDATA%; Android: the app's files dir).
 - ✅ **Owner list (2026-11-19):** in-game exit, store buttons removed, "Press any button to start",
-  credits line, fast forward, texture filtering, mouse look, low-latency mode. Open: camera modes
-  (classic/freeform/first person), radio box clipping, performance (dynarmic / Phase 4).
+  credits line, fast forward, texture filtering, mouse look, low-latency mode, camera modes
+  (classic / freeform / first person). Open: radio box clipping; performance (next: dynarmic
+  stopgap or straight to Phase 4, owner decision; emulated gameplay is ~49 ms/frame, Low ~39 ms).
 - ⬜ **QoL.** Skip the content warning / intro where possible (`skip_intro`), anisotropic filtering,
   FPS counter overlay. Pause on focus loss is done.
 - **Owner decisions needed along the way:** Q7 (trial/Verizon purchase gate) and Q11 (sound names).
