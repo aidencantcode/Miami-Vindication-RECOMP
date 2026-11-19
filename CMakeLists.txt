@@ -31,6 +31,7 @@ add_executable(gangstar
     src/hle/bionic_data.cpp
     src/hle/libc_core.cpp
     src/hle/libc_stdio.cpp
+    src/hle/overrides.cpp
     src/cpu/cpu.cpp
     src/rt/runtime.cpp
     src/jni/jni.cpp

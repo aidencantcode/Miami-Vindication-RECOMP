@@ -38,6 +38,7 @@
 #include "game/mods.h"
 #include "gl/gles1.h"
 #include "hle/hle.h"
+#include "hle/overrides.h"
 #include "input/input.h"
 #include "jni/jni.h"
 #include "rt/runtime.h"
@@ -134,6 +135,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     hle::register_libc_core(rt);
     hle::register_libc_stdio(rt);
     gles1::register_handlers(rt);
+    hle::overrides::set_dir(paths.sandbox / "overrides");
     jni::install(rt);
     if (!opt.no_mods) mods::install(rt, cfg);
     else LOG("mods: disabled (--no-mods)");

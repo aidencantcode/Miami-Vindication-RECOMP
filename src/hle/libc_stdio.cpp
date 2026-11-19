@@ -23,6 +23,7 @@
 
 #include "core/log.h"
 #include "hle/hle.h"
+#include "hle/overrides.h"
 #include "rt/runtime.h"
 
 namespace fs = std::filesystem;
@@ -345,6 +346,7 @@ FILE* open_guest(const std::string& path, bool writable, bool truncate, bool app
     }
     fs::path h = g_fs.resolve_read(path);
     if (h.empty() || fs::is_directory(h, ec)) return nullptr;
+    h = hle::overrides::redirect(h);  // text changes etc. (src/hle/overrides.h)
     *host = h;
     return std::fopen(h.string().c_str(), "rb");
 }

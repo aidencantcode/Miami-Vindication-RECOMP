@@ -268,6 +268,8 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
             ch |= ImGui::Checkbox("Pause when the window loses focus", &s.pause_when_unfocused);
             ch |= ImGui::Checkbox("Hide the Gameloft LIVE! and More Games! buttons", &s.hide_store_buttons);
             restart_note();
+            ch |= ImGui::Checkbox("PC text (\"Press any button to start\", port credit)", &s.custom_text);
+            restart_note();
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();

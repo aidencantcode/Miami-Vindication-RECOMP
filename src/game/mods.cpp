@@ -6,6 +6,7 @@
 #include <unordered_set>
 
 #include "core/log.h"
+#include "hle/overrides.h"
 #include "rt/runtime.h"
 #include "settings/settings.h"
 
@@ -101,6 +102,24 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
                            "_ZNK12SlideControl6draw2dEv", "_ZNK11SwipeButton6draw2dEv", "_ZNK12ToggleButton6draw2dEv",
                            "_ZNK5Wheel6draw2dEv"})
         rt.hook_function(fn, {[](cpu::Cpu& c) { return g_hidden && is_control(c.reg(cpu::R0)); }, nullptr});
+
+    // ---- text changes (string tables served through hle/overrides) ---------------------------------
+    // init.english: 0 "Loading", 1 "Touch the screen to continue", 2 copyright, 3 digits, 4 warning.
+    // about.english (INFO > ABOUT): entries 0-5 are never shown; page 1 = entries 6 ("\0GANGSTAR...\1")
+    // to 12, entry 13 "\n\n" breaks the page, page 2 starts the credits: 14 a blank line, 15
+    // "\0PORT TEAM\1", ... ("\0" / "\1" are literal backslash codes for heading style, "\n" a blank
+    // line). Replacing blank line 14 keeps the entry count, so nothing that indexes the table shifts.
+    if (s.custom_text) {
+        hle::overrides::add("init.english", [](std::vector<uint8_t>& d) {
+            return hle::overrides::string_table_set(d, 1, "Press any button to start");
+        });
+        // Uppercase on purpose: like the other credit headings. Lowercase letters in heading style
+        // are glyphs the game never pre-renders, and adding them overflowed its glyph cache at boot,
+        // which made the title screen prompt disappear (tested).
+        hle::overrides::add("about.english", [](std::vector<uint8_t>& d) {
+            return hle::overrides::string_table_set(d, 14, "\\0DECOMP BY AIDENCANTCODE\\1");
+        });
+    }
 
     // ---- main menu: remove the dead Gameloft store buttons -----------------------------------------
     // Widgets::MainMenu is the Flash movie "widgetMainMenu"; its buttons btnGLLive (event 3 ->

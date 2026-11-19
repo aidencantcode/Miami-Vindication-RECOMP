@@ -42,6 +42,7 @@ struct Settings {
     bool skip_intro = true;                 // skip the content warning / intro movie screens where possible
     bool pause_when_unfocused = true;
     bool hide_store_buttons = true;         // remove the dead Gameloft LIVE! / More Games! main-menu buttons
+    bool custom_text = true;                // "Press any button to start", port credit in the credits
 };
 
 bool load(const std::filesystem::path& file, Settings* s);   // false if the file did not exist
