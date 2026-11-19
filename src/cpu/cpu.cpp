@@ -3,6 +3,7 @@
 #include <unicorn/unicorn.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <stdexcept>
@@ -89,6 +90,8 @@ Cpu::Cpu(rt::Runtime& rt, uint32_t stack_top, const char* name) : rt_(rt), name_
     check_uc(uc_reg_write(uc_, UC_ARM_REG_C1_C0_2, &cpacr), "enable cp10/cp11");
     uint32_t fpexc = 0x40000000;  // FPEXC.EN
     check_uc(uc_reg_write(uc_, UC_ARM_REG_FPEXC, &fpexc), "enable VFP");
+    uint32_t tcg = 0;
+    if (uc_ctl_get_tcg_buffer_size(uc_, &tcg) == UC_ERR_OK) LOG("cpu %s: translation cache %u MB", name, tcg >> 20);
 
     // Mirror every guest region (present and future) into this Unicorn instance.
     rt.mem().add_listener({

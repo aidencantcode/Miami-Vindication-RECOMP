@@ -208,9 +208,11 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
         }
         if (ImGui::BeginTabItem("Graphics")) {
             ch |= combo_str("Quality", &s.quality,
-                            {{"phone", "Phone (exactly as on the device)"}, {"low", "Low"}, {"high", "High"},
+                            {{"phone", "Phone (the game's own pick: high profile, no tweaks)"},
+                             {"low", "Low (fastest: fewer people and cars, shorter view)"}, {"high", "High"},
                              {"ultra", "Ultra (more traffic and people)"}});
             restart_note();
+            ImGui::TextDisabled("While the game runs emulated, Low is about 20%% faster than High/Phone.");
             ch |= ImGui::SliderFloat("Draw distance", &s.draw_distance, 0.5f, 4.0f, "%.2fx");
             restart_note();
             ch |= ImGui::Checkbox("Mipmaps", &s.mipmaps);
