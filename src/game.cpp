@@ -204,6 +204,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
         FATAL("--cpu recomp: this build has no recompiled code (configure with -DGANGSTAR_RECOMP=ON)");
 #endif
     }
+    LOG("cpu backend: %s", opt.recomp ? "recompiled code (--cpu unicorn: emulator)" : "Unicorn emulator");
     int rc = 0;
     int frame = 0;
     try {

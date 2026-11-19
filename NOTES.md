@@ -842,3 +842,12 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
 - Next: (1) run with mods on in recomp mode (hook checks are generated), (2) script into gameplay
   and compare with the Unicorn build (4.5), (3) measure gameplay frame time (4.6), (4) Android
   build of the same C (Phase 5).
+- **Gameplay under recomp, mods on** (same input script as `tools/bench.ps1`): main menu (store
+  buttons hidden by the mod), intro flyover, on foot at the spawn with the tutorial, traffic moving,
+  audio (102 effects, 22 streams, none missing). Game logic **1.3–2.0 ms/frame** at the spawn
+  (Unicorn ~49 ms). Uncapped (`--fps 0`, render x2): **380–485 fps**; with the default limiter it
+  sits at the display's 100 Hz. The 120+ fps target is met on PC.
+- The recompiled backend is now the default whenever the build contains it (`--cpu unicorn` for
+  the emulator). `tools\build.ps1` builds it whenever `work/recomp` has been generated
+  (`-Recomp` the first time, `-NoRecomp` to leave it out) and re-runs the generator when
+  `tools/recomp/*.py` changed (stamp file `work/recomp/.codegen_stamp`).

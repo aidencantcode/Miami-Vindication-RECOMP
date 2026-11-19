@@ -86,6 +86,9 @@ int main(int argc, char** argv) {
     std::string mode = argc > 1 ? argv[1] : "--run";
     int frames = 0;
     RunOptions opt;
+#ifdef GANGSTAR_HAVE_RECOMP
+    opt.recomp = true;  // the recompiled code is in this build: use it unless --cpu unicorn
+#endif
     for (int i = 1; i < argc; ++i)
         if (!std::strcmp(argv[i], "--profile-traps")) opt.profile_traps = true;
         else if (!std::strcmp(argv[i], "--no-vsync")) opt.no_vsync = true;

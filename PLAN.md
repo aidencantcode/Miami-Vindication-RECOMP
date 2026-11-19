@@ -262,8 +262,12 @@ Milestones (each one or more commits, each with a pass/fail check):
   mods on (hooks are generated but untested), crash/hang handling polish.
 - **4.5 Gameplay.** Menus, intro, gameplay, driving; fix divergences found by trace comparison.
   ✔ when the scripted test runs match the Unicorn build (screenshots, audio).
+  **2026-11-19:** menus, intro and on-foot gameplay at the spawn run (mods on, audio OK). Open:
+  driving, missions, longer sessions; screenshot comparison against the Unicorn build.
 - **4.6 Performance.** Registers cached in locals, inlined float helpers, cheap dispatch, PGO/LTO.
   Measure with `tools/bench.ps1`. ✔ at 120+ fps in gameplay.
+  **2026-11-19:** 380–485 fps uncapped at the spawn (game logic 1.3–1.6 ms) without any of these
+  optimisations yet: met on PC. Still matters for Android (slower CPUs).
 - **4.7 Cleanup.** Unicorn stays as the reference/debug backend (`--cpu unicorn`). Notes and docs.
 
 **Phase 5: Android arm64 handhelds (main target after Phase 4).** Same generated C + shim layer,
