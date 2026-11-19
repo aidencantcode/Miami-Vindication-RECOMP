@@ -587,6 +587,35 @@ None of this applies to a PC port: we replace the whole Android/Java layer ourse
 | Q21 | Helicopters/planes: `FlyingControlHandler::handleAcceleration` also uses tilt. Needs the same virtual-steering treatment | Reach a flying section; replicate the driving hook |
 | Q22 | Ghidra marked `__aeabi_fsub` (and 2 more helpers) as non-returning, truncating functions | **Fixed (2026-11-19):** `tools/ghidra/FixNoReturn.java` ran once on the project: 3 helpers cleared, 1,053 fall-throughs disassembled, 473 bodies re-computed. Decompiles now show whole functions (Ghidra may still pull junk ARM-in-Thumb "coprocessor" lines into a few bodies) |
 
+## 11. Recompiler (Phase 4)
+
+Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/symbols/PLT,
+`analyze.py` per-function analysis shared by survey and code generator, `survey.py` → 
+`analysis/recomp_survey.md`). Run: `python -I toolsecompsurvey.py`.
+
+**4.1 survey results (2026-11-19):**
+- `.text` 3.19 MB: 3.0 MB `$t`, 12.5 KB `$a`, 165 KB `$d` (literal pools, jump tables).
+- 24,199 functions: 23,415 Thumb, 784 ARM. All Thumb functions decode with 0 undefined
+  instructions (1.40 M instructions). The 5 "undefined" halfwords the raw mapping-symbol walk finds
+  are ARM thunks carrying a stray `$t` symbol: **function symbol type wins over mapping symbols**.
+- 783 of 784 ARM functions are C++ non-virtual thunks `ldr ip,=off; add ip,pc,ip; (sub|add rN,rN,#k)+;
+  bx ip` (rN = r0, once r1): adjust `this`, tail-call target = add-address + 8 + literal. The last
+  one is `__aeabi_f2uiz` (float → unsigned), which will be implemented in C.
+- **No cross-function branches** (the 18 the raw walk saw come from the mislabelled thunks), no extra
+  entry points. 2,210 `bl` target their own function: GCC Thumb-1 "far jump" (long branch through
+  `bl`, LR saved in the prologue), so they become `goto`.
+- Calls: 58,401 `bl` to function starts, 40,129 `blx` to the PLT (imports), 381 `blx` to ARM thunks,
+  13,083 `blx reg` (virtual calls / function pointers). Returns: 18,331 `pop {..pc}`, 5,013 `bx lr`,
+  57 `bx r3` right after `add sp` (the return address was popped into r3).
+- **Jump tables**: all 227 `mov pc, reg` recovered. Pattern: table = GOT (`0x6349d8`) + literal,
+  target = table + entry. ARMv5T `mov pc` does not interwork (bit 0 may be clear). Bound from `cmp
+  rX,#N` + `bhi/bls` (N+1) or `bcs/bcc` (N). 220 exact; 7 (FreeType parsers, Vsnprintf, sky box,
+  collada) are unbounded guesses. Generated code has to fail loudly on a target outside the table.
+- 727 functions end with a call to a no-return function (abort/longjmp/assert): generated code puts
+  a fatal "fell off the end" after it. Trailing `mov r8, r8` / `0x0000` is alignment padding.
+- `add rX, pc` appears 8,979 times (PIC GOT base). Literal pools are constants (no relocations in
+  the code segment), so they can be folded at translation time.
+
 ## 10. Glossary (RE terms as they come up)
 
 - **ELF / `.so`**: Linux/Android binary format. "Imports" = undefined dynamic symbols
