@@ -585,7 +585,7 @@ None of this applies to a PC port: we replace the whole Android/Java layer ourse
 | Q19 | Controller in the pause menu: Start/B send BACK, which opens the game's "quit to main menu?" dialog, and resuming needs the cursor on "< BACK". Map B/Start to that button? | Find the gameswf menu's back handler (RenderFX / `Widgets::`), or detect the pause menu and tap its BACK |
 | Q20 | Does the game cap its own frame rate? Is game timing frame-rate independent at 120-240 fps? | **Mostly answered (§6c):** no cap, variable integer-ms step from an absolute timestamp, so no drift. Still open: per-frame (not dt-scaled) logic and Box2D behaviour at 4-8 ms steps. Check when the recompiled build runs gameplay at 120+ |
 | Q21 | Helicopters/planes: `FlyingControlHandler::handleAcceleration` also uses tilt. Needs the same virtual-steering treatment | Reach a flying section; replicate the driving hook |
-| Q22 | Ghidra marks `__aeabi_fsub` (and likely other EABI helpers) as non-returning, which truncates functions after the call (e.g. `handleAcceleration` shows 476 of 712 bytes) | Clear "no return" on the `__aeabi_*` thunks and re-run "fix function bodies" in the project (one-off, not `-readOnly`) |
+| Q22 | Ghidra marked `__aeabi_fsub` (and 2 more helpers) as non-returning, truncating functions | **Fixed (2026-11-19):** `tools/ghidra/FixNoReturn.java` ran once on the project: 3 helpers cleared, 1,053 fall-throughs disassembled, 473 bodies re-computed. Decompiles now show whole functions (Ghidra may still pull junk ARM-in-Thumb "coprocessor" lines into a few bodies) |
 
 ## 10. Glossary (RE terms as they come up)
 
