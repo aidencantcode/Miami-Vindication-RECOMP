@@ -26,6 +26,10 @@ void set_device_width(int w);  // what GLMediaPlayer.getDeviceWidth() returns (G
 // LIVE!, More Games). The caller does what Android did: nativePause, then nativeResume on return.
 const char* take_activity_bounce();  // the message, or nullptr
 
+// What the game asked the app to do (Gangster2.Exit / sendAppToBackground); reset when read.
+enum class AppRequest { None, Quit, Minimize };
+AppRequest take_app_request();
+
 constexpr const char* kPkg = "com/gameloft/android/GAND/GloftGMHP/ML/";
 
 }  // namespace jni

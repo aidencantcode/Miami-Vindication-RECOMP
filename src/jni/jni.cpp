@@ -78,6 +78,7 @@ rt::Runtime* g_rt = nullptr;
 uint32_t g_env = 0, g_vm = 0;
 int g_device_width = 800;
 const char* g_activity_bounce = nullptr;  // a Java call "left the app" (message); game.cpp bounces
+AppRequest g_app_request = AppRequest::None;
 uint32_t g_next_handle = layout::kHandleBase + 0x100;
 std::unordered_map<uint32_t, JObj> g_objs;
 std::unordered_map<std::string, uint32_t> g_classes;
@@ -131,7 +132,7 @@ const std::map<std::tuple<std::string, std::string, std::string>, JavaMethod>& j
         auto add = [&](const char* c, const char* n, const char* s, JavaFn f = nullptr) { (*t)[{c, n, s}] = {f}; };
         // Gangster2: lifecycle / store / trial state (values = decompiled Java on a fresh install)
         for (auto [n, s] : std::initializer_list<std::pair<const char*, const char*>>{
-                 {"Exit", "()V"}, {"sendAppToBackground", "()V"}, {"openBrowser", "(Ljava/lang/String;)V"},
+                 {"openBrowser", "(Ljava/lang/String;)V"},
                  {"NotifyTrophy", "(I)V"}, {"lockDemo", "()V"},
                  {"IncreaseLaunchTimes", "()V"}, {"VZInitMobileNetwork", "()V"}, {"VZRestoreNetworkState", "()V"},
                  {"VZRequestLogin", "()V"}, {"VZRequestPurchaseGame", "()V"}, {"VZGetGamePrice", "()[B"},
@@ -139,6 +140,9 @@ const std::map<std::tuple<std::string, std::string, std::string>, JavaMethod>& j
             add("Gangster2", n, s);
         // Gameloft LIVE! (online service, long gone): Java started another activity, so the game went to
         // the background and came back. The port does that bounce at once (see take_activity_bounce).
+        // Exit: Java finished the activity and called System.exit(0). sendAppToBackground: went Home.
+        add("Gangster2", "Exit", "()V", [](auto&) { g_app_request = AppRequest::Quit; return JVal{}; });
+        add("Gangster2", "sendAppToBackground", "()V", [](auto&) { g_app_request = AppRequest::Minimize; return JVal{}; });
         add("Gangster2", "OpenGLive", "(I)V", [](auto&) { g_activity_bounce = "Gameloft LIVE! is not available"; return JVal{}; });
         add("Gangster2", "launchIGP", "(I)V", [](auto&) { g_activity_bounce = "More Games is not available"; return JVal{}; });
         add("Gangster2", "isWifiAlive", "()I", [](auto&) { return ret_i(0); });
@@ -378,6 +382,12 @@ void install(rt::Runtime& rt) {
 uint32_t env() { return g_env; }
 
 void set_device_width(int w) { g_device_width = w; }
+
+AppRequest take_app_request() {
+    const AppRequest r = g_app_request;
+    g_app_request = AppRequest::None;
+    return r;
+}
 
 const char* take_activity_bounce() {
     const char* b = g_activity_bounce;

@@ -290,6 +290,17 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 dump_hud_at = -1;
             }
             if (frame == 0) native("Gangster2_nativeResume", {env, c_g2});
+            switch (jni::take_app_request()) {  // Gangster2.Exit / sendAppToBackground from the last frame
+                case jni::AppRequest::Quit:
+                    LOG("game asked to exit (Gangster2.Exit)");
+                    running = false;
+                    break;
+                case jni::AppRequest::Minimize:
+                    SDL_MinimizeWindow(win);
+                    break;
+                default: break;
+            }
+            if (!running) break;
             if (const char* msg = jni::take_activity_bounce()) {  // the other activity "closes" at once
                 LOG("Java opened another activity (not available in the port): pause + resume");
                 native("Gangster2_nativePause", {env, c_g2});
