@@ -6,6 +6,10 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
 $wheel = "C:\Users\aiden\devtools\python-nupkg\tools\Lib\site-packages\unicorn"
+if (-not (Test-Path $wheel)) {  # other machines: the unicorn package of the Python on PATH (pip install unicorn==2.1.4)
+    $wheel = "$(python -I -c "import os, unicorn; print(os.path.dirname(unicorn.__file__))")".Trim()
+    if (-not $wheel -or -not (Test-Path "$wheel\lib\unicorn.dll")) { throw "Unicorn not found: pip install unicorn==2.1.4" }
+}
 $dst = Join-Path $root "third_party\unicorn"
 New-Item -ItemType Directory -Force "$dst\bin", "$dst\lib", "$dst\include" | Out-Null
 Copy-Item -Recurse -Force "$wheel\include\unicorn" "$dst\include\"

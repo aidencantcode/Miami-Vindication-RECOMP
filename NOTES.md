@@ -856,3 +856,15 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   same script on `--cpu unicorn` gives the same picture at t79 (blue car on the road, same HUD,
   47 ms/frame, 20 fps). Hooks are confirmed working in recomp mode through the main-menu store
   buttons (post hook on GotFocus, pre hook on Notify); camera modes not yet tried there.
+
+### 2026-11-20: README for GitHub
+- `README.md` with banner, screenshots (`docs/images/`, our own captures at 1600×900 → 1280×720
+  JPEG; banner cropped from a title frame without the blinking prompt), how the recompiler works,
+  performance table, build steps and debug options. Captured with `--set` overrides (windowed, no
+  vsync, trilinear, 16× AF, 4× MSAA) so the owner's `settings.ini` stayed untouched.
+- New numbers: 1600×900, render 2×, MSAA 4×, ultra: ~505 fps uncapped on foot (game 1.1 ms),
+  title screen ~1,280 fps.
+- `tools/setup_unicorn.ps1` falls back to the `unicorn` package of the Python on PATH when the
+  owner's portable Python isn't there (other machines).
+- Open for the owner: a license for the project's own code; the screenshots/banner show Gameloft's
+  art (common for fan ports, but their call before the repo goes public).
