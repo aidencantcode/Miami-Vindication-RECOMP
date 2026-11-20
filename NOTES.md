@@ -885,3 +885,8 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   owner's settings (exclusive fullscreen) → 1920×1080 display, 1920×1079 internal.
 - The 2D art (HUD, fonts, menus) exists only at 480p in the data (`*_hi`/`*_lo` variants the game
   probes for are absent), so it is always magnified; the 3D scene is what gains resolution.
+- **Owner's play-test list** (2026-11-20) recorded as PLAN Phase 5A (sprint W/S, radio clip,
+  music/voice/radio looping, random auto aim → RMB, free aim crosshair, VC-style free look, mouse
+  wheel weapons, night/sunrise/sunset lighting), then 5B Android. **Not started: the owner will
+  say when.** Lead found while writing it: the mouse wheel is already mapped, but to a 4-frame
+  pulse that is under 10 ms at today's frame rates (frame-count timing written for ~20 fps).

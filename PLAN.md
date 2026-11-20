@@ -262,15 +262,70 @@ Milestones (each one or more commits, each with a pass/fail check):
   mods on (hooks are generated but untested), crash/hang handling polish.
 - **4.5 Gameplay.** Menus, intro, gameplay, driving; fix divergences found by trace comparison.
   ✔ when the scripted test runs match the Unicorn build (screenshots, audio).
-  **2026-11-19:** menus, intro and on-foot gameplay at the spawn run (mods on, audio OK). Open:
+  **2026-11-19:** menus, intro and on-foot gameplay at the spawn run (mods on). Open:
   driving, missions, longer sessions; screenshot comparison against the Unicorn build.
+  Correction 2026-11-20: "audio OK" only meant the play calls happened (counted in the log, not
+  listened to). The owner hears music, voice lines and radio break and loop: see 5A.3.
 - **4.6 Performance.** Registers cached in locals, inlined float helpers, cheap dispatch, PGO/LTO.
   Measure with `tools/bench.ps1`. ✔ at 120+ fps in gameplay.
   **2026-11-19:** 380–485 fps uncapped at the spawn (game logic 1.3–1.6 ms) without any of these
   optimisations yet: met on PC. Still matters for Android (slower CPUs).
 - **4.7 Cleanup.** Unicorn stays as the reference/debug backend (`--cpu unicorn`). Notes and docs.
 
-**Phase 5: Android arm64 handhelds (main target after Phase 4).** Same generated C + shim layer,
-built for arm64 with SDL2 for Android; GLES 3 backend for the GL bridge; settings UI usable with a
-controller; touch controls shown/hidden per `touch_controls`; target devices Retroid Pocket 6 /
-Odin-class at 120+ fps where the display allows.
+## ⏸ Phase 5: fixes from play-testing, then the Android port (planned 2026-11-20; owner says when to start)
+
+**Owner's play-test list (2026-11-20).** Each item gets its own commit and a pass/fail check.
+Suggested order: shared root causes first (5A.0), then audio, then input, then the visual items.
+
+- **5A.0 Frame-rate assumptions (likely shared cause).** Under Unicorn the game ran at ~20 fps;
+  recompiled it runs at 100–500 fps. Things counted in frames are now 5–25× shorter: the mouse
+  wheel already sends weapon next/prev, but as a **4-frame** button pulse (200 ms at 20 fps, under
+  10 ms at 400 fps), and one-shot taps (`tap_frames_`) work the same way. Make pulses and taps
+  time-based (e.g. ≥ 2 game updates / ≥ 50 ms). Check whether the game's own logic misbehaves at
+  high fps: its timer gives an integer-ms dt, which is only 2 ms at 500 fps. ✔ when the wheel
+  switches weapons reliably at 60, 144 and unlimited fps.
+- **5A.1 Sprint only works left/right.** Shift + A/D sprints, Shift + W/S does not. First
+  suspicion: how the keyboard direction is placed on the virtual stick, or how the game decides
+  "sprint" (stick magnitude/angle, or the sprint button only counting along one axis). Find the
+  game's sprint condition (Ghidra: the player's on-foot control handler) and feed it what it
+  expects. ✔ when sprint works in all 8 directions with keyboard and stick.
+- **5A.2 Radio box clipped** on its right edge (known since Phase 3; not glScissor, not culling,
+  not width). Next suspects: the sprite/gameswf path that draws the frame (mirrored right half,
+  atlas UVs). ✔ when the box is complete at 800, 854 and 16:9 widths.
+- **5A.3 Audio: music, voice lines and radio break and loop (~1 s); SFX are fine.** First
+  isolate: same scene at `--fps 30` vs unlimited, and `--cpu unicorn` vs recomp. Suspects: the
+  `GLMediaPlayer` stream semantics (isMediaPlaying / restart logic polled every frame), stream
+  buffering in the mixer, or game-side timing at high fps (5A.0). ✔ when music, radio and
+  cutscene voices play through without repeats, at any frame rate.
+- **5A.4 Auto aim fires at random on PC.** On the phone the game auto-aims at whatever you tap.
+  On PC, clicks or mouse-look touches probably land on targets and count as "tap to target".
+  New behaviour: **auto aim only while the right mouse button is held** (lock onto the target
+  nearest the crosshair or screen centre), and no stray target taps otherwise. Controllers keep
+  the game's auto aim. ✔ when walking and looking around never locks onto anything without RMB.
+- **5A.5 Free aim mode (PC).** GTA Vice City PC-style manual aiming: a crosshair (circle + centre
+  dot), shots go where the camera points, no auto lock. Needs RE of the targeting/shooting path:
+  how a target or direction is chosen (ray from the camera instead of a picked target). A
+  Controls-tab setting: auto aim / free aim; controller sessions default to auto aim.
+  ✔ when you can hit a chosen NPC, car or tyre by pointing at it.
+- **5A.6 Real free look (camera).** GTA VC PC-style: snappy, direct mouse movement (no smoothing or
+  acceleration), the camera **stays where you leave it**, and it only drifts back behind the player
+  or car slowly, after a delay with no camera input, while moving or driving. Today's "freeform"
+  only keeps the offset across one update and doesn't cover vehicles. Settings: return delay and
+  speed. ✔ on foot and in cars.
+- **5A.7 Weapon switching on the mouse wheel.** Already mapped; broken by 5A.0 (pulse too short).
+  ✔ together with 5A.0.
+- **5A.8 Night, sunrise and sunset lighting too bright, no blue night tint.** The phone version
+  had this problem on some hardware too. Leads: `CustomSkyBoxSceneNode::setSkyColor`, the
+  time-of-day / ambient / fog parameters in the data, and GL state the bridge may not reproduce
+  (texture env combiners, `GL_TEXTURE_ENV_COLOR`, lighting or material colours, fog). Compare what
+  the game requests per time of day with what we render; fix in the bridge if we drop state, or
+  in data/hook if the game picks the wrong (e.g. low-quality profile) values.
+  ✔ when night is dark and blue-tinted, and sunrise/sunset are warm, like the intended look.
+- Also still open from before: owner's call on Q11 (restore missing sounds by default), camera
+  modes not yet tried in recomp mode, and Phase 4.6 speed work (matters most for Android).
+
+**5B Android arm64 handhelds (the main target).** Same generated C + shim layer, built for arm64
+with clang, SDL2 for Android; GLES 3 backend for the GL bridge; DXT textures need a software
+decode path on GPUs without S3TC (Adreno/Mali); settings UI usable with a controller; touch
+controls shown/hidden per `touch_controls`; target devices Retroid Pocket 6 / Odin-class at
+120+ fps where the display allows. Fixes from 5A carry over automatically (shared code).
