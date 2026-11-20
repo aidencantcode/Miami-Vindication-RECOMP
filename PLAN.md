@@ -297,23 +297,33 @@ Suggested order: shared root causes first (5A.0), then audio, then input, then t
   `GLMediaPlayer` stream semantics (isMediaPlaying / restart logic polled every frame), stream
   buffering in the mixer, or game-side timing at high fps (5A.0). ✔ when music, radio and
   cutscene voices play through without repeats, at any frame rate.
-- **5A.4 Auto aim fires at random on PC.** On the phone the game auto-aims at whatever you tap.
-  On PC, clicks or mouse-look touches probably land on targets and count as "tap to target".
-  New behaviour: **auto aim only while the right mouse button is held** (lock onto the target
-  nearest the crosshair or screen centre), and no stray target taps otherwise. Controllers keep
-  the game's auto aim. ✔ when walking and looking around never locks onto anything without RMB.
-- **5A.5 Free aim mode (PC).** GTA Vice City PC-style manual aiming: a crosshair (circle + centre
-  dot), shots go where the camera points, no auto lock. Needs RE of the targeting/shooting path:
-  how a target or direction is chosen (ray from the camera instead of a picked target). A
-  Controls-tab setting: auto aim / free aim; controller sessions default to auto aim.
-  ✔ when you can hit a chosen NPC, car or tyre by pointing at it.
+- **5A.4 Aiming and firing scheme (owner's design, 2026-11-20).** Fixes the random aim locks
+  (on PC, clicks and mouse-look touches land on targets and count as the phone's "tap to target").
+  - **Tap-to-target removed** for mouse, keyboard and controller play: nothing locks unless you ask.
+    (Real touchscreens on Android: decide in 5B whether to keep the phone behaviour there.)
+  - **Manual aim** while **RT** (controller) or the **right mouse button** is held: GTA Vice City
+    PC-style crosshair (circle + centre dot), shots go where the camera points, no lock.
+  - **Auto aim** while **LT** or the **middle mouse button** is held: lock onto the nearest target,
+    stay locked while held, release to unlock.
+  - **Fire:** controller **RB** on foot and in cars; mouse **left button** on foot, **right
+    button** in cars (Space / Left Ctrl keep firing too).
+  - Moves this forces on the controller: weapon prev/next LB/RB → **D-pad left/right**; radio
+    next station D-pad right → **D-pad down** (radio on/off stays D-pad up); cover LT/B → **B**.
+    In cars RT/LT stay accelerate/brake.
+  - Needs RE of the targeting/shooting path: how the game picks a target (the tap handler, the
+    nearest-target search), and how a shot direction is formed (ray from the camera instead of a
+    picked target). Update the F1 controls table and README when done.
+  - ✔ when walking and looking around never locks onto anything by itself; RT/RMB aims where the
+    crosshair points (hit a chosen NPC, car or tyre); LT/MMB locks the nearest target; RB/RMB fires
+    from a car.
+- **5A.5** merged into 5A.4.
 - **5A.6 Real free look (camera).** GTA VC PC-style: snappy, direct mouse movement (no smoothing or
   acceleration), the camera **stays where you leave it**, and it only drifts back behind the player
   or car slowly, after a delay with no camera input, while moving or driving. Today's "freeform"
   only keeps the offset across one update and doesn't cover vehicles. Settings: return delay and
   speed. ✔ on foot and in cars.
-- **5A.7 Weapon switching on the mouse wheel.** Already mapped; broken by 5A.0 (pulse too short).
-  ✔ together with 5A.0.
+- **5A.7 Weapon switching:** mouse wheel (already mapped, broken by 5A.0's too-short pulse), keys
+  1/2, controller D-pad left/right (moved off LB/RB, see 5A.4). ✔ together with 5A.0.
 - **5A.8 Night, sunrise and sunset lighting too bright, no blue night tint.** The phone version
   had this problem on some hardware too. Leads: `CustomSkyBoxSceneNode::setSkyColor`, the
   time-of-day / ambient / fog parameters in the data, and GL state the bridge may not reproduce
