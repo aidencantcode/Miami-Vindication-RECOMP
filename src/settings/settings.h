@@ -13,7 +13,7 @@ struct Settings {
     bool vsync = true;
     int fps_limit = -1;                     // -1 = display refresh rate, 0 = unlimited, else 30..360 (the phone ran ~30)
     std::string aspect = "auto";            // game width at 480 high: auto (window) | 4:3 | 5:3 | 16:10 | 16:9 | 21:9
-    int render_scale = 0;                   // 0 = auto (>= window resolution), else 1..8 x 480p
+    int render_scale = 0;                   // 0 = native (exactly the window), else 1..8 x 480p (supersampling)
     int msaa = 4;                           // 0 | 2 | 4 | 8
     std::string fit = "aspect";             // aspect | stretch | integer
     bool smooth_scaling = true;             // linear filter when scaling to the window
@@ -57,6 +57,5 @@ bool apply_override(Settings* s, const std::string& assignment);
 
 // Derived values
 int logical_width(const Settings& s, int window_w, int window_h);  // game width for a 480-high screen
-int auto_render_scale(int window_h);                                 // smallest scale covering the window
 
 }  // namespace settings

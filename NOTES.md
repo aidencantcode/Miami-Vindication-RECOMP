@@ -399,8 +399,17 @@ PC = svc+4; writing PC (with the Thumb bit) from a hook redirects execution; nes
 ### Display: virtual framebuffer (`gles1::vfb_*`)
 - The game is always told **height 480**, width = 480 × aspect (640..1280). 800 and 854 lay out correctly.
   At 1280×720 the UI breaks (it is authored for 480 high).
-- It draws into an FBO of logical × scale (auto scale = ceil(window height / 480)) with optional MSAA.
-  glViewport/glScissor/point size/line width are scaled; glReadPixels/glCopyTexImage2D are translated.
+- It draws into an FBO of any size with optional MSAA: `render_scale` N = logical × N
+  (supersampling), **0 = native** = exactly the rectangle the image occupies in the window (1:1
+  present, no resampling; follows window resizes; never below 480p). Until 2026-11-20 "auto" was
+  ceil(window height / 480), so 1080p rendered 1440 lines and 720p 960 lines, then resampled.
+  glViewport/glScissor are mapped by their edges at any ratio (2.25 at 1080p); point size/line
+  width scale by the vertical ratio; glReadPixels/glCopyTexImage2D are translated. The game's own
+  viewport/scissor values are tracked: queries return them, and they are re-mapped when the game
+  switches between the screen and its own FBOs.
+- Exclusive fullscreen (`window_mode = fullscreen`) uses the monitor's desktop mode (resolution
+  and refresh). Before, SDL switched the display to `window_width × window_height` (1280×720 in
+  the owner's settings), so the monitor upscaled a 720p picture: the "upscaling" the owner saw.
   The present step blits into the window (aspect / stretch / integer fit) and saves/restores the GL state it touches.
 - Overlays (menu cursor) are scissored clears after the present, so no game GL state is touched.
 
@@ -868,3 +877,11 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   owner's portable Python isn't there (other machines).
 - Open for the owner: a license for the project's own code; the screenshots/banner show Gameloft's
   art (common for fan ports, but their call before the repo goes public).
+- **Resolution fix (owner report: "the game is upscaling"):** two causes. (1) Exclusive fullscreen
+  switched the display to the windowed size (1280×720) and the monitor upscaled it; it now uses
+  the desktop mode. (2) The render scale only came in multiples of 480 lines; the default is now
+  **native** (internal resolution = shown size, 1920×1079 at 1080p, ×2.25), integer scales stay for
+  supersampling. Checked: 1600×900 window → 1600×899 internal, HUD/3D/speed blur aligned;
+  owner's settings (exclusive fullscreen) → 1920×1080 display, 1920×1079 internal.
+- The 2D art (HUD, fonts, menus) exists only at 480p in the data (`*_hi`/`*_lo` variants the game
+  probes for are absent), so it is always magnified; the 3D scene is what gains resolution.

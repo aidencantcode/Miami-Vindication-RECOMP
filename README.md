@@ -198,7 +198,8 @@ Two bugs it found, each within minutes:
   automatically.
 - **High frame rates.** The frame limiter follows the display by default, or can be set to a fixed
   rate or unlimited. There's also a low-latency mode.
-- **Render options:** render scale, MSAA, aspect ratios, texture filtering (game / nearest /
+- **Render options:** native resolution (the 480p game rendered at exactly your screen's
+  resolution) or 1×–6× supersampling, MSAA, aspect ratios, texture filtering (game / nearest /
   bilinear / trilinear), anisotropic filtering, quality profiles (phone / low / high / ultra) and
   draw distance.
 - **Camera modes:** classic (re-centres behind you, like the phone), freeform and first person.

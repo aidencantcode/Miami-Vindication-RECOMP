@@ -190,7 +190,7 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
                              {360, "360"}, {0, "Unlimited"}});
             if (s.vsync) ImGui::TextDisabled("With VSync on, the display's refresh rate also caps the frame rate.");
             ch |= combo_int("Render scale", &s.render_scale,
-                            {{0, "Auto (match the window)"}, {1, "1x (480p, original)"}, {2, "2x (960p)"}, {3, "3x (1440p)"},
+                            {{0, "Native (window resolution)"}, {1, "1x (480p, original)"}, {2, "2x (960p)"}, {3, "3x (1440p)"},
                              {4, "4x (1920p)"}, {5, "5x (2400p)"}, {6, "6x (2880p)"}});
             ch |= combo_int("Anti-aliasing", &s.msaa, {{0, "Off"}, {2, "MSAA 2x"}, {4, "MSAA 4x"}, {8, "MSAA 8x"}});
             ch |= combo_str("Scaling", &s.fit, {{"aspect", "Keep aspect"}, {"stretch", "Stretch"}, {"integer", "Integer"}});

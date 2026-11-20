@@ -85,7 +85,22 @@ GLuint g_read_fb = 0, g_read_color = 0;                  // logical-size target 
 GLuint g_game_fb = 0;                                    // framebuffer the game thinks is bound
 float g_aniso = 1;                                       // anisotropic filtering level (1 = off)
 bool on_screen() { return g_game_fb == 0; }
-int S() { return on_screen() ? g_cfg.scale : 1; }       // scale applied to "screen" coordinates
+// "Screen" coordinates (logical_w x logical_h) -> internal pixels. Any ratio works (2.25 at 1080p).
+double kx() { return on_screen() ? double(g_cfg.width) / g_cfg.logical_w : 1.0; }
+double ky() { return on_screen() ? double(g_cfg.height) / g_cfg.logical_h : 1.0; }
+// Map a rectangle by its edges, so rectangles that touch still touch at fractional ratios.
+void map_rect(const GLint r[4], GLint* x, GLint* y, GLsizei* w, GLsizei* h) {
+    const double sx = kx(), sy = ky();
+    const GLint x0 = GLint(std::lround(r[0] * sx)), x1 = GLint(std::lround((double(r[0]) + r[2]) * sx));
+    const GLint y0 = GLint(std::lround(r[1] * sy)), y1 = GLint(std::lround((double(r[1]) + r[3]) * sy));
+    *x = x0; *y = y0; *w = x1 - x0; *h = y1 - y0;
+}
+// Viewport and scissor box as the game set them (its own coordinates). Queries return these, and
+// they are re-mapped whenever the game switches between the screen and its own framebuffers,
+// as they would be on a real logical_w x logical_h screen.
+GLint g_viewport[4] = {0, 0, 800, 480}, g_scissor[4] = {0, 0, 800, 480};
+void apply_viewport() { GLint x, y; GLsizei w, h; map_rect(g_viewport, &x, &y, &w, &h); glViewport(x, y, w, h); }
+void apply_scissor() { GLint x, y; GLsizei w, h; map_rect(g_scissor, &x, &y, &w, &h); glScissor(x, y, w, h); }
 
 void make_rb(GLuint* rb, GLenum fmt, int w, int h, int samples) {
     if (!*rb) p_glGenRenderbuffers(1, rb);
@@ -95,7 +110,7 @@ void make_rb(GLuint* rb, GLenum fmt, int w, int h, int samples) {
 }
 
 bool build_vfb() {
-    const int w = g_cfg.logical_w * g_cfg.scale, h = g_cfg.logical_h * g_cfg.scale;
+    const int w = g_cfg.width, h = g_cfg.height;
     if (!g_vfb) p_glGenFramebuffers(1, &g_vfb);
     make_rb(&g_vfb_color, GL_RGBA8, w, h, g_cfg.msaa);
     make_rb(&g_vfb_depth, GL_DEPTH24_STENCIL8, w, h, g_cfg.msaa);
@@ -118,15 +133,19 @@ bool build_vfb() {
         LOG("GL: virtual framebuffer %dx%d (msaa %d) incomplete: %#x", w, h, g_cfg.msaa, st);
         return false;
     }
-    LOG("GL: virtual framebuffer %dx%d (logical %dx%d x%d, msaa %d)", w, h, g_cfg.logical_w, g_cfg.logical_h,
-        g_cfg.scale, g_cfg.msaa);
+    LOG("GL: virtual framebuffer %dx%d (logical %dx%d x%.3g, msaa %d)", w, h, g_cfg.logical_w, g_cfg.logical_h,
+        double(h) / g_cfg.logical_h, g_cfg.msaa);
+    if (on_screen()) {  // the game's viewport/scissor in the new internal pixels
+        apply_viewport();
+        apply_scissor();
+    }
     return true;
 }
 
 // The single-sample framebuffer holding the current "screen" image (resolving MSAA if needed).
 GLuint screen_source() {
     if (!g_cfg.msaa) return g_vfb;
-    const int w = g_cfg.logical_w * g_cfg.scale, h = g_cfg.logical_h * g_cfg.scale;
+    const int w = g_cfg.width, h = g_cfg.height;
     p_glBindFramebuffer(GL_READ_FRAMEBUFFER, g_vfb);
     p_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_resolve_fb);
     p_glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
@@ -165,17 +184,17 @@ H(depth_func) { glDepthFunc(a.u32()); }
 H(depth_mask) { glDepthMask(GLboolean(a.u32())); }
 H(depth_rangef) { float n = a.f32(), f = a.f32(); glDepthRange(n, f); }
 H(polygon_offset) { float f = a.f32(), u = a.f32(); glPolygonOffset(f, u); }
-H(line_width) { glLineWidth(a.f32() * S()); }
-H(point_size) { glPointSize(a.f32() * S()); }
+H(line_width) { glLineWidth(float(a.f32() * ky())); }
+H(point_size) { glPointSize(float(a.f32() * ky())); }
 H(point_param_f) {
     GLenum p = a.u32(); float v = a.f32();
-    if (p == GL_POINT_SIZE_MIN || p == GL_POINT_SIZE_MAX) v *= S();
+    if (p == GL_POINT_SIZE_MIN || p == GL_POINT_SIZE_MAX) v = float(v * ky());
     p_glPointParameterf(p, v);
 }
 H(point_param_fv) { GLenum p = a.u32(); p_glPointParameterfv(p, static_cast<const GLfloat*>(host(c, a.u32()))); }
 H(sample_coverage) { float v = a.f32(); GLboolean inv = GLboolean(a.u32()); p_glSampleCoverage(v, inv); }
-H(scissor) { GLint x = a.s32(), y = a.s32(); GLsizei w = a.s32(), h = a.s32(); int s = S(); glScissor(x * s, y * s, w * s, h * s); }
-H(viewport) { GLint x = a.s32(), y = a.s32(); GLsizei w = a.s32(), h = a.s32(); int s = S(); glViewport(x * s, y * s, w * s, h * s); }
+H(scissor) { for (GLint& v : g_scissor) v = a.s32(); apply_scissor(); }
+H(viewport) { for (GLint& v : g_viewport) v = a.s32(); apply_viewport(); }
 H(shade_model) { glShadeModel(a.u32()); }
 H(hint) { GLenum t = a.u32(), m = a.u32(); glHint(t, m); }
 H(stencil_func) { GLenum f = a.u32(); GLint r = a.s32(); GLuint m = a.u32(); glStencilFunc(f, r, m); }
@@ -211,16 +230,20 @@ H(get_integerv) {
     GLenum p = a.u32();
     GLint* out = static_cast<GLint*>(const_cast<void*>(host(c, a.u32())));
     if (p == GL_FRAMEBUFFER_BINDING) { *out = GLint(g_game_fb); return; }
+    if (p == GL_VIEWPORT || p == GL_SCISSOR_BOX) {  // the game's own values, not internal pixels
+        std::memcpy(out, p == GL_VIEWPORT ? g_viewport : g_scissor, sizeof g_viewport);
+        return;
+    }
     glGetIntegerv(p, out);
-    if ((p == GL_VIEWPORT || p == GL_SCISSOR_BOX) && S() > 1)
-        for (int i = 0; i < 4; ++i) out[i] /= S();
 }
 H(get_floatv) {
     GLenum p = a.u32();
     GLfloat* out = static_cast<GLfloat*>(const_cast<void*>(host(c, a.u32())));
+    if (p == GL_VIEWPORT || p == GL_SCISSOR_BOX) {
+        for (int i = 0; i < 4; ++i) out[i] = float(p == GL_VIEWPORT ? g_viewport[i] : g_scissor[i]);
+        return;
+    }
     glGetFloatv(p, out);
-    if ((p == GL_VIEWPORT || p == GL_SCISSOR_BOX) && S() > 1)
-        for (int i = 0; i < 4; ++i) out[i] /= float(S());
 }
 
 // ---- fixed-function pipeline ---------------------------------------------------------------------
@@ -403,23 +426,26 @@ H(copy_tex_image_2d) {
     GLenum t = a.u32(); GLint l = a.s32(); GLenum ifmt = a.u32(); GLint x = a.s32(), y = a.s32();
     GLsizei w = a.s32(), h = a.s32(); GLint b = a.s32();
     if (!on_screen()) return glCopyTexImage2D(t, l, ifmt, x, y, w, h, b);
-    // Copy from the high-resolution screen: the texture gets scale x the pixels (sharper effects);
+    // Copy from the high-resolution screen: the texture gets the internal pixels (sharper effects);
     // texture coordinates are normalised, so the game is unaffected.
-    const int s = g_cfg.scale;
+    const GLint r[4] = {x, y, w, h};
+    GLint ix, iy;
+    GLsizei iw, ih;
+    map_rect(r, &ix, &iy, &iw, &ih);
     p_glBindFramebuffer(GL_READ_FRAMEBUFFER, screen_source());
-    glCopyTexImage2D(t, l, ifmt, x * s, y * s, w * s, h * s, b);
+    glCopyTexImage2D(t, l, ifmt, ix, iy, iw, ih, b);
     bind_game_fb();
 }
 H(generate_mipmap) { p_glGenerateMipmap(a.u32()); }
 H(read_pixels) {
     GLint x = a.s32(), y = a.s32(); GLsizei w = a.s32(), h = a.s32(); GLenum f = a.u32(), t = a.u32();
     void* out = const_cast<void*>(host(c, a.u32()));
-    if (!on_screen() || (g_cfg.scale == 1 && !g_cfg.msaa)) return glReadPixels(x, y, w, h, f, t, out);
+    const bool native_size = g_cfg.width == g_cfg.logical_w && g_cfg.height == g_cfg.logical_h;
+    if (!on_screen() || (native_size && !g_cfg.msaa)) return glReadPixels(x, y, w, h, f, t, out);
     // Downscale the screen into a logical-size buffer so the game gets exactly w*h pixels.
-    const int s = g_cfg.scale;
     p_glBindFramebuffer(GL_READ_FRAMEBUFFER, screen_source());
     p_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_read_fb);
-    p_glBlitFramebuffer(0, 0, g_cfg.logical_w * s, g_cfg.logical_h * s, 0, 0, g_cfg.logical_w, g_cfg.logical_h,
+    p_glBlitFramebuffer(0, 0, g_cfg.width, g_cfg.height, 0, 0, g_cfg.logical_w, g_cfg.logical_h,
                         GL_COLOR_BUFFER_BIT, GL_LINEAR);
     p_glBindFramebuffer(GL_READ_FRAMEBUFFER, g_read_fb);
     glReadPixels(x, y, w, h, f, t, out);
@@ -433,8 +459,13 @@ H(delete_framebuffers) { GLsizei n = a.s32(); p_glDeleteFramebuffers(n, static_c
 H(delete_renderbuffers) { GLsizei n = a.s32(); p_glDeleteRenderbuffers(n, static_cast<const GLuint*>(host(c, a.u32()))); }
 H(bind_framebuffer) {
     GLenum t = a.u32();
+    const bool was_screen = on_screen();
     g_game_fb = a.u32();
     p_glBindFramebuffer(t, g_game_fb ? g_game_fb : g_vfb);  // "0" is our virtual screen
+    if (on_screen() != was_screen) {  // screen <-> the game's own target: re-map viewport/scissor
+        apply_viewport();
+        apply_scissor();
+    }
 }
 H(bind_renderbuffer) { GLenum t = a.u32(); p_glBindRenderbuffer(t, a.u32()); }
 H(renderbuffer_storage) { GLenum t = a.u32(), f = a.u32(); GLsizei w = a.s32(), h = a.s32(); p_glRenderbufferStorage(t, f, w, h); }
@@ -507,24 +538,37 @@ uint64_t draw_calls() { return g_draws; }
 
 bool vfb_init(const VfbConfig& cfg) {
     g_cfg = cfg;
-    if (g_cfg.scale < 1) g_cfg.scale = 1;
+    g_cfg.width = std::max(1, g_cfg.width);
+    g_cfg.height = std::max(1, g_cfg.height);
+    g_viewport[0] = g_viewport[1] = g_scissor[0] = g_scissor[1] = 0;
+    g_viewport[2] = g_scissor[2] = g_cfg.logical_w;
+    g_viewport[3] = g_scissor[3] = g_cfg.logical_h;
     return build_vfb();
 }
 
-void vfb_set_scale(int scale) {
-    if (scale < 1 || scale == g_cfg.scale) return;
-    g_cfg.scale = scale;
-    build_vfb();
-}
-
-bool vfb_reconfigure(int scale, int msaa) {
-    if (scale < 1) scale = 1;
-    if (scale == g_cfg.scale && msaa == g_cfg.msaa) return true;
-    g_cfg.scale = scale;
+bool vfb_reconfigure(int width, int height, int msaa) {
+    width = std::max(1, width);
+    height = std::max(1, height);
+    if (width == g_cfg.width && height == g_cfg.height && msaa == g_cfg.msaa) return true;
+    g_cfg.width = width;
+    g_cfg.height = height;
     g_cfg.msaa = msaa;
     if (build_vfb()) return true;
     g_cfg.msaa = 0;
     return build_vfb();
+}
+
+void fit_rect(int lw, int lh, int win_w, int win_h, Fit fit, int* x, int* y, int* w, int* h) {
+    *w = win_w;
+    *h = win_h;
+    if (fit == Fit::Aspect || fit == Fit::Integer) {
+        double k = std::min(double(win_w) / lw, double(win_h) / lh);
+        if (fit == Fit::Integer && k >= 1.0) k = std::floor(k);
+        *w = int(lw * k + 0.5);
+        *h = int(lh * k + 0.5);
+    }
+    *x = (win_w - *w) / 2;
+    *y = (win_h - *h) / 2;  // from the top
 }
 
 void set_anisotropy(int level) {
@@ -552,15 +596,9 @@ void vfb_present(int win_w, int win_h, Fit fit, bool linear, int* rx, int* ry, i
     glGetFloatv(GL_COLOR_CLEAR_VALUE, cc);
     glGetBooleanv(GL_COLOR_WRITEMASK, cm);
 
-    const int lw = g_cfg.logical_w, lh = g_cfg.logical_h, sw = lw * g_cfg.scale, sh = lh * g_cfg.scale;
-    int w = win_w, h = win_h;
-    if (fit == Fit::Aspect || fit == Fit::Integer) {
-        double k = std::min(double(win_w) / lw, double(win_h) / lh);
-        if (fit == Fit::Integer && k >= 1.0) k = std::floor(k);
-        w = int(lw * k + 0.5);
-        h = int(lh * k + 0.5);
-    }
-    const int x = (win_w - w) / 2, y = (win_h - h) / 2;  // y from the top
+    const int sw = g_cfg.width, sh = g_cfg.height;
+    int x, y, w, h;
+    fit_rect(g_cfg.logical_w, g_cfg.logical_h, win_w, win_h, fit, &x, &y, &w, &h);
     GLuint src = screen_source();
     p_glBindFramebuffer(GL_READ_FRAMEBUFFER, src);
     p_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);

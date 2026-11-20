@@ -62,10 +62,31 @@ gles1::Fit fit_of(const std::string& s) {
     return s == "stretch" ? gles1::Fit::Stretch : s == "integer" ? gles1::Fit::Integer : gles1::Fit::Aspect;
 }
 
+// Internal resolution: render_scale N = N x the game's 480p screen (supersampling when larger than
+// the window); 0 = native: exactly the size the image is shown at in the window, so presenting it
+// is a 1:1 copy with no resampling (never below the game's own 480p).
+void internal_size(const settings::Settings& s, int kW, int kH, int dw, int dh, int* w, int* h) {
+    if (s.render_scale > 0) {
+        *w = kW * s.render_scale;
+        *h = kH * s.render_scale;
+        return;
+    }
+    int x, y;
+    gles1::fit_rect(kW, kH, dw, dh, fit_of(s.fit), &x, &y, w, h);
+    *w = std::max(*w, kW);
+    *h = std::max(*h, kH);
+}
+
 void apply_window_mode(SDL_Window* win, const settings::Settings& s) {
     if (s.window_mode == "borderless") SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP);
-    else if (s.window_mode == "fullscreen") SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN);
-    else {
+    else if (s.window_mode == "fullscreen") {
+        // Exclusive fullscreen at the monitor's own resolution and refresh rate. Without this SDL
+        // switches the display to the windowed size (e.g. 1280x720) and the monitor upscales it.
+        SDL_DisplayMode dm;
+        if (SDL_GetDesktopDisplayMode(std::max(0, SDL_GetWindowDisplayIndex(win)), &dm) == 0)
+            SDL_SetWindowDisplayMode(win, &dm);
+        SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN);
+    } else {
         SDL_SetWindowFullscreen(win, 0);
         SDL_SetWindowSize(win, s.window_w, s.window_h);
         SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
@@ -123,7 +144,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     gles1::VfbConfig vc;
     vc.logical_w = kW;
     vc.logical_h = kH;
-    vc.scale = cfg.render_scale > 0 ? cfg.render_scale : settings::auto_render_scale(dh);
+    internal_size(cfg, kW, kH, dw, dh, &vc.width, &vc.height);
     vc.msaa = cfg.msaa;
     if (!gles1::vfb_init(vc)) {
         LOG("GL: retrying the virtual framebuffer without MSAA");
@@ -131,8 +152,9 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
         if (!gles1::vfb_init(vc)) FATAL("cannot create the virtual framebuffer");
     }
     jni::set_device_width(kW);
-    LOG("display: window %dx%d (%s), game %dx%d rendered at x%d, msaa %d", dw, dh, cfg.window_mode.c_str(), kW, kH,
-        vc.scale, vc.msaa);
+    LOG("display: window %dx%d (%s), game %dx%d rendered at %dx%d (%s), msaa %d", dw, dh, cfg.window_mode.c_str(), kW,
+        kH, vc.width, vc.height, cfg.render_scale > 0 ? (std::to_string(cfg.render_scale) + "x").c_str() : "native",
+        vc.msaa);
     gles1::set_anisotropy(cfg.anisotropy);
     gles1::set_texture_filter(filter_of(cfg.texture_filter));
     ui::init(win, ctx);
@@ -394,6 +416,15 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 ui::set_open(true);
                 open_settings_at = -1;
             }
+            // Native render resolution follows the window (resize, fullscreen switch): rebuild the
+            // framebuffer before the game draws this frame.
+            SDL_GL_GetDrawableSize(win, &dw, &dh);
+            if (cfg.render_scale <= 0) {
+                int iw, ih;
+                internal_size(cfg, kW, kH, dw, dh, &iw, &ih);
+                if (iw != gles1::vfb_config().width || ih != gles1::vfb_config().height)
+                    gles1::vfb_reconfigure(iw, ih, gles1::vfb_config().msaa);
+            }
             // The settings menu pauses the game: the last frame stays on screen underneath.
             const bool menu_open = ui::is_open();
             if (menu_open != menu_was_open) {
@@ -435,14 +466,15 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
             }
             {  // settings menu / FPS counter / toasts; apply what changed
                 const settings::Settings before = cfg;
-                stats.render_w = kW * gles1::vfb_config().scale;
-                stats.render_h = kH * gles1::vfb_config().scale;
+                stats.render_w = gles1::vfb_config().width;
+                stats.render_h = gles1::vfb_config().height;
                 if (ui::draw(cfg, stats)) {
                     if (cfg.window_mode != before.window_mode) apply_window_mode(win, cfg);
                     if (cfg.vsync != before.vsync) SDL_GL_SetSwapInterval(cfg.vsync ? 1 : 0);
-                    if (cfg.render_scale != before.render_scale || cfg.msaa != before.msaa) {
-                        const int scale = cfg.render_scale > 0 ? cfg.render_scale : settings::auto_render_scale(dh);
-                        if (!gles1::vfb_reconfigure(scale, cfg.msaa)) ui::toast("That anti-aliasing level is not supported");
+                    if (cfg.render_scale != before.render_scale || cfg.msaa != before.msaa || cfg.fit != before.fit) {
+                        int iw, ih;
+                        internal_size(cfg, kW, kH, dw, dh, &iw, &ih);
+                        if (!gles1::vfb_reconfigure(iw, ih, cfg.msaa)) ui::toast("That anti-aliasing level is not supported");
                     }
                     if (cfg.anisotropy != before.anisotropy) gles1::set_anisotropy(cfg.anisotropy);
                     if (cfg.texture_filter != before.texture_filter) gles1::set_texture_filter(filter_of(cfg.texture_filter));

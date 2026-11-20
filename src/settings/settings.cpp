@@ -141,6 +141,4 @@ int logical_width(const Settings& s, int window_w, int window_h) {
     return std::clamp(w, 640, 1280);  // the game lays out for a 480-high screen of any width (tested 800, 854)
 }
 
-int auto_render_scale(int window_h) { return std::clamp(int(std::ceil(window_h / 480.0)), 1, 8); }
-
 }  // namespace settings
