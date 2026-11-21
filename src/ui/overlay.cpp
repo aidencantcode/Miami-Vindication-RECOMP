@@ -222,6 +222,8 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
                              {"trilinear", "Trilinear (smoothest)"}});
             ch |= combo_int("Anisotropic filtering", &s.anisotropy, {{1, "Off"}, {2, "2x"}, {4, "4x"}, {8, "8x"}, {16, "16x"}});
             ImGui::TextDisabled("Filtering changes apply immediately.");
+            ch |= ImGui::Checkbox("Restored day/night look (night city, sunrise and sunset)", &s.night_textures);
+            ImGui::TextDisabled("Night uses the game's own unused night textures; dawn and dusk tint the city to match the sky.");
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Audio")) {

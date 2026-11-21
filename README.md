@@ -202,6 +202,9 @@ Two bugs it found, each within minutes:
   resolution) or 1×–6× supersampling, MSAA, aspect ratios, texture filtering (game / nearest /
   bilinear / trilinear), anisotropic filtering, quality profiles (phone / low / high / ultra) and
   draw distance.
+- **Restored day/night look:** the game ships night versions of the whole city (lit windows,
+  blue night) but its code to use them was dead, so phones showed a daylight city all night.
+  The port swaps them in at night and tints the city through sunrise and sunset to match the sky.
 - **Camera modes:** classic (re-centres behind you, like the phone), freeform and first person.
 - **Fast forward** (F2 or R3).
 - Gameloft LIVE! / More Games store buttons removed. "Press any button to start" replaces the touch

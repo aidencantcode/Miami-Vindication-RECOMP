@@ -331,6 +331,8 @@ Suggested order: shared root causes first (5A.0), then audio, then input, then t
   the game requests per time of day with what we render; fix in the bridge if we drop state, or
   in data/hook if the game picks the wrong (e.g. low-quality profile) values.
   ✔ when night is dark and blue-tinted, and sunrise/sunset are warm, like the intended look.
+  **Done 2026-11-21**: the game's night textures were dead code; restored, plus a dawn/dusk tint
+  (NOTES §5A.8). Setting `[graphics] night_textures`.
 - Also still open from before: owner's call on Q11 (restore missing sounds by default), camera
   modes not yet tried in recomp mode, and Phase 4.6 speed work (matters most for Android).
 

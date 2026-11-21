@@ -4,6 +4,8 @@
 // boot + first gameplay load, FLOAT/UBYTE vertex arrays (no GL_FIXED), ushort indices,
 // DXT1/DXT5 compressed textures, point sprites.
 #include <cstdint>
+#include <functional>
+#include <vector>
 
 namespace rt { class Runtime; }
 
@@ -34,6 +36,22 @@ bool vfb_reconfigure(int width, int height, int msaa);
 // Anisotropic filtering for mipmapped textures (applied when the game sets a texture's
 // minification filter, i.e. as textures load). 1 = off.
 void set_anisotropy(int level);
+
+// Texture content hooks (used to restore the game's unused night textures, game/night_textures).
+struct TextureObserver {
+    // every glCompressedTexImage2D of a 2D texture (tex = the texture bound when the game uploaded)
+    std::function<void(unsigned tex, int level, unsigned format, int w, int h, const uint8_t* data, int size)>
+        on_compressed_upload;
+    std::function<void(unsigned tex)> on_delete;
+};
+void set_texture_observer(TextureObserver obs);
+struct CompressedLevel { int w, h; const uint8_t* data; int size; };
+// Re-specify mip levels of an existing texture; the game's texture bindings are left as they were.
+void replace_compressed_levels(unsigned tex, unsigned format, const std::vector<CompressedLevel>& levels);
+// Time-of-day tint: draws whose unit-0 texture is a registered world texture get multiplied by
+// the tint colour (1,1,1 = off). Everything else (characters, cars, sky, HUD) is untouched.
+void set_world_texture(unsigned tex, bool world);
+void set_world_tint(float r, float g, float b);
 
 // Texture filtering override (applied live to every texture whose filters the game set).
 enum class TextureFilter { Game, Nearest, Bilinear, Trilinear };

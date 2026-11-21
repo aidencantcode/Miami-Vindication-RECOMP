@@ -6,10 +6,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "core/log.h"
@@ -226,10 +229,17 @@ H(get_string) {
     }
     c.ret(it->second);
 }
+void tint_before_draw();  // world tint stage (time of day), defined with the texture state below
+int tint_unit();          // texture unit of that stage (-1: none); hidden from the game
 H(get_integerv) {
     GLenum p = a.u32();
     GLint* out = static_cast<GLint*>(const_cast<void*>(host(c, a.u32())));
     if (p == GL_FRAMEBUFFER_BINDING) { *out = GLint(g_game_fb); return; }
+    if (p == GL_MAX_TEXTURE_UNITS && tint_unit() > 0) {  // the last unit is the time-of-day tint's
+        glGetIntegerv(p, out);
+        *out = std::min(*out, GLint(tint_unit()));
+        return;
+    }
     if (p == GL_VIEWPORT || p == GL_SCISSOR_BOX) {  // the game's own values, not internal pixels
         std::memcpy(out, p == GL_VIEWPORT ? g_viewport : g_scissor, sizeof g_viewport);
         return;
@@ -257,17 +267,36 @@ H(color4f) { float r = a.f32(), g = a.f32(), b = a.f32(), al = a.f32(); glColor4
 H(color4ub) { GLubyte r = GLubyte(a.u32()), g = GLubyte(a.u32()), b = GLubyte(a.u32()), al = GLubyte(a.u32()); glColor4ub(r, g, b, al); }
 H(normal3f) { float x = a.f32(), y = a.f32(), z = a.f32(); glNormal3f(x, y, z); }
 H(multi_texcoord4f) { GLenum t = a.u32(); float s = a.f32(), u = a.f32(), r = a.f32(), q = a.f32(); p_glMultiTexCoord4f(t, s, u, r, q); }
-H(fogf) { GLenum p = a.u32(); float v = a.f32(); glFogf(p, v); }
-H(fogfv) { GLenum p = a.u32(); glFogfv(p, static_cast<const GLfloat*>(host(c, a.u32()))); }
-H(lightf) { GLenum l = a.u32(), p = a.u32(); float v = a.f32(); glLightf(l, p, v); }
-H(lightfv) { GLenum l = a.u32(), p = a.u32(); glLightfv(l, p, static_cast<const GLfloat*>(host(c, a.u32()))); }
-H(light_modelf) { GLenum p = a.u32(); float v = a.f32(); glLightModelf(p, v); }
-H(light_modelfv) { GLenum p = a.u32(); glLightModelfv(p, static_cast<const GLfloat*>(host(c, a.u32()))); }
-H(materialf) { GLenum f = a.u32(), p = a.u32(); float v = a.f32(); glMaterialf(f, p, v); }
-H(materialfv) { GLenum f = a.u32(), p = a.u32(); glMaterialfv(f, p, static_cast<const GLfloat*>(host(c, a.u32()))); }
-H(tex_envf) { GLenum t = a.u32(), p = a.u32(); float v = a.f32(); glTexEnvf(t, p, v); }
-H(tex_envi) { GLenum t = a.u32(), p = a.u32(); GLint v = a.s32(); glTexEnvi(t, p, v); }
-H(tex_envfv) { GLenum t = a.u32(), p = a.u32(); glTexEnvfv(t, p, static_cast<const GLfloat*>(host(c, a.u32()))); }
+// GANGSTAR_GL_LIGHT_TRACE=1: log each distinct lighting/fog/texenv call once (day/night debugging).
+void light_trace(const char* fn, GLenum a, GLenum b, const float* v, int n) {
+    static const bool on = [] { const char* e = std::getenv("GANGSTAR_GL_LIGHT_TRACE"); return e && *e && *e != '0'; }();
+    if (!on) return;
+    static std::unordered_map<std::string, int> seen;
+    char buf[200];
+    int k = std::snprintf(buf, sizeof buf, "%s(%#x, %#x", fn, a, b);
+    for (int i = 0; i < n && k < int(sizeof buf) - 16; ++i) k += std::snprintf(buf + k, sizeof buf - k, ", %.3f", v[i]);
+    std::snprintf(buf + k, sizeof buf - k, ")");
+    if (seen[buf]++ == 0 && seen.size() < 400) LOG("gl-light %s", buf);
+}
+int param_count(GLenum p) {
+    switch (p) {
+        case GL_AMBIENT: case GL_DIFFUSE: case GL_SPECULAR: case GL_POSITION: case GL_EMISSION:
+        case GL_AMBIENT_AND_DIFFUSE: case GL_LIGHT_MODEL_AMBIENT: case GL_FOG_COLOR: case GL_TEXTURE_ENV_COLOR: return 4;
+        case GL_SPOT_DIRECTION: return 3;
+        default: return 1;
+    }
+}
+H(fogf) { GLenum p = a.u32(); float v = a.f32(); light_trace("glFogf", p, 0, &v, 1); glFogf(p, v); }
+H(fogfv) { GLenum p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32())); light_trace("glFogfv", p, 0, v, param_count(p)); glFogfv(p, v); }
+H(lightf) { GLenum l = a.u32(), p = a.u32(); float v = a.f32(); light_trace("glLightf", l, p, &v, 1); glLightf(l, p, v); }
+H(lightfv) { GLenum l = a.u32(), p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32())); light_trace("glLightfv", l, p, v, param_count(p)); glLightfv(l, p, v); }
+H(light_modelf) { GLenum p = a.u32(); float v = a.f32(); light_trace("glLightModelf", p, 0, &v, 1); glLightModelf(p, v); }
+H(light_modelfv) { GLenum p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32())); light_trace("glLightModelfv", p, 0, v, param_count(p)); glLightModelfv(p, v); }
+H(materialf) { GLenum f = a.u32(), p = a.u32(); float v = a.f32(); light_trace("glMaterialf", f, p, &v, 1); glMaterialf(f, p, v); }
+H(materialfv) { GLenum f = a.u32(), p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32())); light_trace("glMaterialfv", f, p, v, param_count(p)); glMaterialfv(f, p, v); }
+H(tex_envf) { GLenum t = a.u32(), p = a.u32(); float v = a.f32(); light_trace("glTexEnvf", t, p, &v, 1); glTexEnvf(t, p, v); }
+H(tex_envi) { GLenum t = a.u32(), p = a.u32(); GLint v = a.s32(); float fv = float(v); light_trace("glTexEnvi", t, p, &fv, 1); glTexEnvi(t, p, v); }
+H(tex_envfv) { GLenum t = a.u32(), p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32())); light_trace("glTexEnvfv", t, p, v, param_count(p)); glTexEnvfv(t, p, v); }
 
 // ---- vertex arrays and drawing ---------------------------------------------------------------------
 H(vertex_pointer) { GLint s = a.s32(); GLenum t = a.u32(); GLsizei st = a.s32(); glVertexPointer(s, t, st, array_ptr(c, a.u32(), g_array_buffer)); }
@@ -275,9 +304,10 @@ H(texcoord_pointer) { GLint s = a.s32(); GLenum t = a.u32(); GLsizei st = a.s32(
 H(color_pointer) { GLint s = a.s32(); GLenum t = a.u32(); GLsizei st = a.s32(); glColorPointer(s, t, st, array_ptr(c, a.u32(), g_array_buffer)); }
 H(normal_pointer) { GLenum t = a.u32(); GLsizei st = a.s32(); glNormalPointer(t, st, array_ptr(c, a.u32(), g_array_buffer)); }
 H(client_active_texture) { p_glClientActiveTexture(a.u32()); }
-H(draw_arrays) { GLenum m = a.u32(); GLint f = a.s32(); GLsizei n = a.s32(); glDrawArrays(m, f, n); ++g_draws; }
+H(draw_arrays) { GLenum m = a.u32(); GLint f = a.s32(); GLsizei n = a.s32(); tint_before_draw(); glDrawArrays(m, f, n); ++g_draws; }
 H(draw_elements) {
     GLenum m = a.u32(); GLsizei n = a.s32(); GLenum t = a.u32();
+    tint_before_draw();
     glDrawElements(m, n, t, array_ptr(c, a.u32(), g_element_buffer));
     ++g_draws;
 }
@@ -364,11 +394,89 @@ void reapply_all_filters() {
     glBindTexture(GL_TEXTURE_2D, g_bound_2d[g_unit]);
 }
 
+TextureObserver g_tex_observer;
+
+// ---- world tint (time of day, game/night_textures) ----------------------------------------------
+// An extra fixed-function texture stage after the game's own: MODULATE(previous, constant colour),
+// enabled only for draws whose unit-0 texture is a registered world texture (city, ground), so
+// characters, cars, the sky and the HUD keep the game's own colours.
+float g_tint[3] = {1, 1, 1};
+std::unordered_set<GLuint> g_world_tex;
+int g_tint_unit = -1;  // fixed-function unit used for the stage (-1: none spare)
+bool g_tint_on = false, g_tint_dirty = true;
+
+int tint_unit() { return g_tint_unit; }
+
+void tint_init() {
+    GLint units = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_UNITS, &units);
+    if (units < 3) { LOG("GL: no spare texture unit for the time-of-day tint (%d units)", units); return; }
+    g_tint_unit = std::min(int(units), 8) - 1;
+    GLuint white = 0;
+    glGenTextures(1, &white);
+    p_glActiveTexture(GL_TEXTURE0 + g_tint_unit);
+    glBindTexture(GL_TEXTURE_2D, white);
+    const uint8_t px[4] = {255, 255, 255, 255};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB, GL_PREVIOUS);
+    glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_RGB, GL_SRC_COLOR);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB, GL_CONSTANT);
+    glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND1_RGB, GL_SRC_COLOR);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA, GL_PREVIOUS);
+    glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_ALPHA, GL_SRC_ALPHA);
+    glDisable(GL_TEXTURE_2D);
+    p_glActiveTexture(GL_TEXTURE0 + g_unit);
+    LOG("GL: time-of-day tint on texture unit %d", g_tint_unit);
+}
+
+void tint_before_draw() {
+    if (g_tint_unit < 0) return;
+    const bool tinted = std::abs(g_tint[0] - 1) + std::abs(g_tint[1] - 1) + std::abs(g_tint[2] - 1) > 0.003f;
+    const bool want = tinted && g_world_tex.count(g_bound_2d[0]) != 0;
+    if (want == g_tint_on && !(want && g_tint_dirty)) return;
+    p_glActiveTexture(GL_TEXTURE0 + g_tint_unit);
+    if (want) {
+        if (!g_tint_on) glEnable(GL_TEXTURE_2D);
+        if (g_tint_dirty) {
+            const GLfloat c[4] = {g_tint[0], g_tint[1], g_tint[2], 1};
+            glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, c);
+            g_tint_dirty = false;
+        }
+    } else {
+        glDisable(GL_TEXTURE_2D);
+    }
+    static const bool debug = std::getenv("GANGSTAR_TINT_DEBUG") != nullptr;
+    if (debug) {
+        static int logged = 0;
+        if (want && logged < 6) {
+            GLfloat c[4] = {}, mode = 0, src1 = 0, comb = 0;
+            GLint unit_bound = 0;
+            glGetTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, c);
+            glGetTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, &mode);
+            glGetTexEnvfv(GL_TEXTURE_ENV, GL_SOURCE1_RGB, &src1);
+            glGetTexEnvfv(GL_TEXTURE_ENV, GL_COMBINE_RGB, &comb);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &unit_bound);
+            LOG("tint-debug: unit %d env color %.2f %.2f %.2f mode %#x combine %#x src1 %#x bound %d enabled %d (tint %.2f %.2f %.2f)",
+                g_tint_unit, c[0], c[1], c[2], unsigned(mode), unsigned(comb), unsigned(src1), unit_bound,
+                int(glIsEnabled(GL_TEXTURE_2D)), g_tint[0], g_tint[1], g_tint[2]);
+            ++logged;
+        }
+    }
+    p_glActiveTexture(GL_TEXTURE0 + g_unit);
+    g_tint_on = want;
+}
+
 H(gen_textures) { GLsizei n = a.s32(); glGenTextures(n, static_cast<GLuint*>(const_cast<void*>(host(c, a.u32())))); }
 H(delete_textures) {
     GLsizei n = a.s32();
     const GLuint* ids = static_cast<const GLuint*>(host(c, a.u32()));
     for (GLsizei i = 0; i < n; ++i) {
+        if (g_tex_observer.on_delete) g_tex_observer.on_delete(ids[i]);
         g_tex_filters.erase(ids[i]);
         for (GLuint& b : g_bound_2d)
             if (b == ids[i]) b = 0;
@@ -415,7 +523,10 @@ H(tex_subimage_2d) {
 H(compressed_tex_image_2d) {
     GLenum t = a.u32(); GLint l = a.s32(); GLenum ifmt = a.u32(); GLsizei w = a.s32(), h = a.s32(); GLint b = a.s32();
     GLsizei n = a.s32();
-    p_glCompressedTexImage2D(t, l, ifmt, w, h, b, n, host(c, a.u32()));
+    const void* data = host(c, a.u32());
+    p_glCompressedTexImage2D(t, l, ifmt, w, h, b, n, data);
+    if (t == GL_TEXTURE_2D && g_tex_observer.on_compressed_upload)
+        g_tex_observer.on_compressed_upload(g_bound_2d[g_unit], l, ifmt, w, h, static_cast<const uint8_t*>(data), n);
 }
 H(compressed_tex_subimage_2d) {
     GLenum t = a.u32(); GLint l = a.s32(), x = a.s32(), y = a.s32(); GLsizei w = a.s32(), h = a.s32();
@@ -485,6 +596,7 @@ bool load_gl() {
     if (!p_##name) { LOG("GL: missing entry point %s", #name); ok = false; }
     GL_EXT_FUNCS(LOAD)
 #undef LOAD
+    if (ok) tint_init();
     return ok;
 }
 
@@ -556,6 +668,32 @@ bool vfb_reconfigure(int width, int height, int msaa) {
     if (build_vfb()) return true;
     g_cfg.msaa = 0;
     return build_vfb();
+}
+
+void set_texture_observer(TextureObserver obs) { g_tex_observer = std::move(obs); }
+
+void set_world_texture(unsigned tex, bool world) {
+    if (world) g_world_tex.insert(tex);
+    else g_world_tex.erase(tex);
+}
+
+void set_world_tint(float r, float g, float b) {
+    const float c[3] = {std::clamp(r, 0.0f, 1.0f), std::clamp(g, 0.0f, 1.0f), std::clamp(b, 0.0f, 1.0f)};
+    if (c[0] != g_tint[0] || c[1] != g_tint[1] || c[2] != g_tint[2]) {
+        std::copy(c, c + 3, g_tint);
+        g_tint_dirty = true;
+    }
+}
+
+void replace_compressed_levels(unsigned tex, unsigned format, const std::vector<CompressedLevel>& levels) {
+    // Upload through unit 0, then put back what the game had bound there (and its active unit).
+    if (g_unit != 0) p_glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    for (size_t i = 0; i < levels.size(); ++i)
+        p_glCompressedTexImage2D(GL_TEXTURE_2D, GLint(i), format, levels[i].w, levels[i].h, 0, levels[i].size,
+                                 levels[i].data);
+    glBindTexture(GL_TEXTURE_2D, g_bound_2d[0]);
+    if (g_unit != 0) p_glActiveTexture(GL_TEXTURE0 + g_unit);
 }
 
 void fit_rect(int lw, int lh, int win_w, int win_h, Fit fit, int* x, int* y, int* w, int* h) {

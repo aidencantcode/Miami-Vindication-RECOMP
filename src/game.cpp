@@ -38,6 +38,7 @@
 #include "core/log.h"
 #include "game.h"
 #include "game/mods.h"
+#include "game/night_textures.h"
 #include "gl/gles1.h"
 #include "hle/hle.h"
 #include "hle/overrides.h"
@@ -158,6 +159,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     gles1::set_anisotropy(cfg.anisotropy);
     gles1::set_texture_filter(filter_of(cfg.texture_filter));
     ui::init(win, ctx);
+    nighttex::init(paths.data);  // the game's unused night city textures (game/night_textures.h)
 
     // ---- runtime ----------------------------------------------------------------------------------
     rt::Runtime rt;
@@ -219,6 +221,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     }
 
     cpu::Cpu& cpu = rt.main_cpu();
+    const uint32_t daytime_obj = rt.lib_object("_ZN7DayTime9s_dayTimeE");  // DayTime::s_dayTime, state at +4
     if (opt.recomp) {
 #ifdef GANGSTAR_HAVE_RECOMP
         if (!recomp::bind(rt, cpu, &err)) FATAL("recomp: %s", err.c_str());
@@ -441,6 +444,8 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 else
                     mods::set_touch_controls_hidden(cfg.touch_controls == "hide");
                 const auto t_game = Clock::now();
+                nighttex::update(cfg.night_textures, int(rt.mem().r32(daytime_obj + 4)),  // DayTime state, ms of day
+                                int(rt.mem().r32(daytime_obj + 8) / 60000));
                 cpu.call(rt.lib_func("Java_com_gameloft_android_GAND_GloftGMHP_ML_GameRenderer_nativeRender"), {env, c_gr});
                 const double ms = std::chrono::duration<double, std::milli>(Clock::now() - t_game).count();
                 game_ms += ms;

@@ -26,6 +26,7 @@ struct Settings {
     float draw_distance = 1.5f;             // multiplier on the profile's far plane + texture streaming radius
     int anisotropy = 8;                     // 0/1 = off, 2..16
     std::string texture_filter = "game";    // game | nearest | bilinear | trilinear
+    bool night_textures = true;             // restore the unused night city textures (game/night_textures)
 
     // [controls]
     std::string touch_controls = "auto";    // auto (hide while a pad/keyboard drives) | show | hide

@@ -39,6 +39,7 @@ add_executable(gangstar
     src/input/input.cpp
     src/settings/settings.cpp
     src/game/mods.cpp
+    src/game/night_textures.cpp
     src/ui/overlay.cpp
     src/audio/mixer.cpp
     src/audio/media_player.cpp

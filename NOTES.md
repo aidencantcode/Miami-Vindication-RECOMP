@@ -890,3 +890,47 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   wheel weapons, night/sunrise/sunset lighting), then 5B Android. **Not started: the owner will
   say when.** Lead found while writing it: the mouse wheel is already mapped, but to a 4-frame
   pulse that is under 10 ms at today's frame rates (frame-count timing written for ~20 fps).
+- **5A in progress (2026-11-20/21).** Findings so far, parked while the lighting goes first:
+  - Uncapped fps can freeze the loading screen: at ~3,000 fps (1280×720, no MSAA, loading
+    screen) the game stopped updating for 30+ s (no `_Update`, no draws) while 30 fps loaded
+    fine. `glitch::os::Timer::getRealTime` = gettimeofday in whole ms. Likely cause: frame
+    intervals < 1 ms. Fix candidate: never run the game faster than ~1,000 fps (5A.0).
+  - Audio: the game loops sounds itself in `SoundManager::update` (restart when start + length
+    < now_ms; now_ms = (1e6·sec + usec)/1000 in 32-bit int). The radio is restarted by
+    `update` when `isSoundPlaying(track)` (→ GLMediaPlayer.isMediaPlaying) returns 0, so a stream
+    that reports "not playing" too early is restarted (candidate cause of the ~1 s loops).
+    `GANGSTAR_AUDIO_TRACE=1` logs every media call with a timestamp. The owner's save starts on
+    foot downtown, so the old car-entry script no longer applies.
+- **5A.8 Lighting: done (2026-11-21).** Root cause: the shipped game never shows its night city.
+  - Day/night model (`DayTime`, object `DayTime::s_dayTime`: state at +4, ms of the day at +8):
+    dawn 03:00 (4 h, state 0), day 06:59 (8 h, 1), dusk 15:00 (4 h, 2), night 18:59 to 02:59 (8 h, 3).
+    `DayTime::UpdateInfo` blends `SkyColors` and sends real night lighting to GL (light 0
+    ambient ≈ 0.01, diffuse blue 0.38/0.63/0.84, fog dark blue). That only affects lit objects:
+    characters and cars. The city is unlit; its look is baked into the atlas textures.
+  - The data has a night twin for every city atlas: `atlasN` → `nightN`, `alpha_atlasN` →
+    `alpha_nightN`, plus `vegetation_00_night`, `bridge_side_night`, `bridge_under_night`,
+    `expaniolaway_night`, `guardfence_night`. All are DXT DDS files despite the `.tga` name, 1024²,
+    11 mips. The swap code (`CStreamTextureManager::Update` → `CStreamTexture::setNightActive`
+    on DayTime state 3) is **dead**: CStreamTextures are only created by
+    `CCustomResFactory::getTexture` (for names with "atlas" and without "Bitmaptexture"), and that
+    factory is only installed by `buildBatchMesh`, an offline tool `Application::Init` runs only
+    with a developer flag and then `exit(0)`. Real phones showed the same daylight city at night.
+  - Fix, `src/game/night_textures.cpp` (setting `[graphics] night_textures`, default on):
+    - recognises day textures when the game uploads them (FNV fingerprint of the first 1 KB of
+      level 0, plus levels 1-2 in case top mips are skipped);
+    - at night (state 3) re-uploads the night twin into the same GL texture, 4 per frame;
+    - textures without a twin (ground, grass, concrete, props, water, distant-city LOD: list
+      `kTintNames`) get the night look by scaling DXT endpoint colours by (0.201, 0.211, 0.321).
+      That factor is a least-squares fit over all 66 atlas pairs with lit windows excluded; DXT1
+      endpoint order and indices are fixed up so the block mode doesn't change.
+  - Dawn/dusk: a fixed-function tint stage on the last texture unit (unit 3 here; hidden from the
+    game by reporting one less `GL_MAX_TEXTURE_UNITS`, because the game itself sets up all
+    units). It is MODULATE(previous, constant) and only enabled for draws whose unit-0 texture is
+    a registered world texture showing its day image. Keyframes in `night_textures.cpp`: golden
+    17:00, orange 18:00, purple 18:30, night tint at 18:59 (then the night images take over with no
+    visible step, only lit windows appear); dawn reverses through pink 05:00. Verified with
+    screenshots at 05:00, 06:00, 12:00, 17:30, 18:30, 18:55, 19:05, 23:30, 02:55, 03:05, 04:00. No
+    measurable fps cost.
+  - Debug aids: `GANGSTAR_TIME=HH:MM` pins the clock through the game's `DayTime::setTime` (hook on
+    `DayTime::update`, which is in codegen's HOOKABLE list); `GANGSTAR_GL_LIGHT_TRACE=1` logs
+    each distinct light/material/fog/texenv call; `GANGSTAR_TINT_DEBUG=1` reads back the tint stage.

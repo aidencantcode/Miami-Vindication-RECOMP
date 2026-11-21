@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <unordered_set>
@@ -85,6 +87,33 @@ void log_profile(cpu::Cpu& c, const char* when) {
 void install(rt::Runtime& rt, const settings::Settings& s) {
     g_rt = &rt;
     g_hidden = s.touch_controls == "hide";
+
+    // ---- time of day override (debugging the day/night look: GANGSTAR_TIME=HH:MM) -------------
+    // Pins the game clock through its own DayTime::setTime before every DayTime::update.
+    if (const char* t = std::getenv("GANGSTAR_TIME")) {
+        int h = 0, m = 0;
+        std::sscanf(t, "%d:%d", &h, &m);
+        const uint32_t set_time = rt.lib_func("_ZN7DayTime7setTimeEii");
+        rt.hook_function("_ZN7DayTime6updateEd", {[set_time, h, m](cpu::Cpu& c) {
+                             const uint32_t self = c.reg(cpu::R0);
+                             c.call(set_time, {self, uint32_t(h), uint32_t(m)});
+                             static int logged_state = -2;
+                             auto& mem = c.rt().mem();
+                             const int state = int(mem.r32(self + 4));
+                             if (state != logged_state) {
+                                 auto g = [&](const char* n) { return int(mem.r32(c.rt().lib_object(n))) / 60000; };
+                                 LOG("daytime: state %d at %02d:%02d (minutes: dawn %d+%d day %d+%d dusk %d+%d night %d+%d)",
+                                     state, h, m, g("_ZN7DayTime9DawnStartE"), g("_ZN7DayTime12DawnDurationE"),
+                                     g("_ZN7DayTime8DayStartE"), g("_ZN7DayTime11DayDurationE"), g("_ZN7DayTime9DuskStartE"),
+                                     g("_ZN7DayTime12DuskDurationE"), g("_ZN7DayTime10NightStartE"),
+                                     g("_ZN7DayTime13NightDurationE"));
+                                 logged_state = state;
+                             }
+                             return false;
+                         },
+                         nullptr});
+        LOG("mods: time of day pinned to %02d:%02d (GANGSTAR_TIME)", h, m);
+    }
 
     // ---- graphics profile ---------------------------------------------------------------------
     const settings::Settings cfg = s;  // captured by value

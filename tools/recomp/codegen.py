@@ -88,6 +88,7 @@ HOOKABLE = {
     "_ZN5Menus8MainMenu8GotFocusEv",
     "_ZN5Menus8MainMenu6NotifyEPK10MenuWidgeti",
     "_ZN21DrivingControlHandler18handleAccelerationEPK14EvAcceleration",
+    "_ZN7DayTime6updateEd",  # time-of-day override (GANGSTAR_TIME)
 }
 
 

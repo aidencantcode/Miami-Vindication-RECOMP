@@ -1,6 +1,8 @@
 #include "audio/media_player.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <deque>
 #include <fstream>
 #include <memory>
@@ -38,6 +40,18 @@ std::vector<int> g_missing;
 const std::string& java_name(int i) {
     static const std::string none;
     return i >= 0 && i < int(g_java.size()) ? g_java[i] : none;
+}
+
+// GANGSTAR_AUDIO_TRACE=1: log every call the game makes (seconds since start, call, id, name).
+bool tracing() {
+    static const bool on = [] { const char* e = std::getenv("GANGSTAR_AUDIO_TRACE"); return e && *e && *e != '0'; }();
+    return on;
+}
+void trace(const char* what, int i, float a = 0, float b = 0) {
+    if (!tracing()) return;
+    static const auto t0 = std::chrono::steady_clock::now();
+    const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    LOG("audio-trace %9.3f %-14s %4d %-28s %.3f %.3f", t, what, i, java_name(i).c_str(), a, b);
 }
 
 audio::Group group_of(int i) {
@@ -136,6 +150,7 @@ int is_sound_loaded(int i) {
 }
 
 void play_sound(int i, float volume, float rate) {
+    trace("play", i, volume, rate);
     load_sound(i);
     Pool& p = g_pool[i];
     if (!p.clip) return;
@@ -148,6 +163,7 @@ void play_sound(int i, float volume, float rate) {
 }
 
 void stop_sound(int i) {
+    trace("stop", i);
     auto it = g_pool.find(i);
     if (it == g_pool.end() || !it->second.voice) return;
     audio::stop(it->second.voice);
@@ -176,6 +192,7 @@ void reset_pool() {
 
 // ---- MediaPlayer ----------------------------------------------------------------------------------
 void load_sound_big(int i) {
+    trace("load_big", i);
     Big& b = g_big[i];
     if (b.voice && audio::alive(b.voice)) return;
     const std::string& path = path_of(i);
@@ -190,6 +207,7 @@ int is_sound_loaded_big(int i) {
 }
 
 void play_sound_big(int i, float volume, int loop) {
+    trace("play_big", i, volume, float(loop));
     const std::string& n = java_name(i);
     const float gain = n.rfind("m_", 0) == 0 ? g_music_gain : n.rfind("sfx_", 0) == 0 ? g_sfx_gain
                      : (n.rfind("vfx_", 0) == 0 || n.rfind("cin_", 0) == 0) ? g_vfx_gain : (n.empty() ? g_sfx_gain : 0.0f);
@@ -215,6 +233,7 @@ void play_sound_big(int i, float volume, int loop) {
 }
 
 void stop_sound_big(int i) {
+    trace("stop_big", i);
     auto it = g_big.find(i);
     if (it == g_big.end()) return;
     audio::stop(it->second.voice);
@@ -223,10 +242,12 @@ void stop_sound_big(int i) {
 }
 
 void pause_sound_big(int i) {
+    trace("pause_big", i);
     if (auto it = g_big.find(i); it != g_big.end() && audio::playing(it->second.voice)) audio::set_paused(it->second.voice, true);
 }
 
 void resume_sound_big(int i) {
+    trace("resume_big", i);
     if (auto it = g_big.find(i); it != g_big.end() && audio::paused(it->second.voice)) audio::set_paused(it->second.voice, false);
 }
 
@@ -235,7 +256,7 @@ void set_volume_big(int i, float volume) {
         audio::set_volume(it->second.voice, std::clamp(volume / kBigDivisor, 0.0f, 1.0f));
 }
 
-void reset_sound(int i) { if (auto it = g_big.find(i); it != g_big.end()) audio::rewind(it->second.voice); }
+void reset_sound(int i) { trace("reset", i); if (auto it = g_big.find(i); it != g_big.end()) audio::rewind(it->second.voice); }
 
 int is_media_playing(int i) {
     auto it = g_big.find(i);
@@ -243,6 +264,7 @@ int is_media_playing(int i) {
 }
 
 void pause_all_sounds() {
+    trace("pause_all", -1);
     for (int id : g_active) {
         Big& b = g_big[id];
         if (audio::playing(b.voice)) {
@@ -253,6 +275,7 @@ void pause_all_sounds() {
 }
 
 void resume_all_sounds() {
+    trace("resume_all", -1);
     for (int id : g_active) {
         Big& b = g_big[id];
         if (b.paused_by_all) {
@@ -263,6 +286,7 @@ void resume_all_sounds() {
 }
 
 void stop_all_big() {
+    trace("stop_all_big", -1);
     for (int id : std::vector<int>(g_active)) stop_sound_big(id);
 }
 
