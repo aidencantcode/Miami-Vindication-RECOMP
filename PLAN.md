@@ -336,6 +336,49 @@ Suggested order: shared root causes first (5A.0), then audio, then input, then t
 - Also still open from before: owner's call on Q11 (restore missing sounds by default), camera
   modes not yet tried in recomp mode, and Phase 4.6 speed work (matters most for Android).
 
+**5C Visual upgrades (owner's list, 2026-11-21; not started: after 5A, owner says when).**
+The game tuned its distances for 2011 phones. Write every shader pass so it also runs on the GLES 3
+bridge planned for 5B. **SSAO dropped** (owner, 2026-11-21: small gain on this low-poly city, costly
+to tune).
+- **5C.0 Groundwork for screen effects.** A hook at the exact point between the 3D scene and the HUD
+  (a game function wrapped by the recompiler, like `DayTime::update`), the virtual framebuffer's depth
+  as a readable texture (it is a renderbuffer today), and a small post-process pass chain run there,
+  so effects never touch the HUD. ✔ when a test pass (e.g. invert colours) changes the 3D scene only.
+- **5C.1 Characters, cars and the player follow the time of day.** They are lit by the game's one
+  per-vertex light, whose night colour (ambient ≈ 0.01, diffuse 0.38/0.63/0.84) was tuned for the
+  daylight city phones showed; next to the restored night city they look 2–4× too bright. Scale the
+  light colours the game sends with the same dawn/dusk/night curve as the city, keep them a little
+  brighter for readability (setting), and tint the unlit dynamic draws, leaving out headlights,
+  glows, muzzle flashes, sky and HUD. First a night trace of which car/ped draws are lit.
+  ✔ when people and cars sit in the night and sunset scene like the buildings do.
+- **5C.2 Draw distance slider does nothing.** Findings so far (NOTES §5C): it only applies at start
+  (profile load), not at all with `quality = phone`, and it scales only the streaming radius and
+  the low-res city boundary, which also set the fog range. It does not touch per-object LOD
+  distances, terrain LOD or the camera far plane. Make it act on what limits the view, live if
+  possible. ✔ with A/B screenshots at 0.5×, 1×, 2×, 4× from the same spot.
+- **5C.3 LOD options: much less aggressive, or off.** Settings for the detail-to-low-res switch
+  distance (multiplier up to "never switch inside the view") and per-object LOD. Leads:
+  `LODSceneNode` / `GS3DStuff::parseSceneNodeForLOD`, `CLowResCitySceneManager::setNearPlane`
+  (fed from `GetLowResFarPlane`), `CTerrainSceneNode::overrideLODDistance`, `g_perfConfigLowResFar`,
+  `CCameraSceneNode::setFarValue`. Watch the guest memory and streaming: more detailed sectors
+  loaded at once than a phone ever held. ✔ when driving downtown shows no visible pop-in at the
+  highest setting, with memory and fps measured.
+- **5C.4 Atmospheric fog (GTA SA-style).** Once the view reaches far, fog sells the depth. Step 1:
+  retune the game's own fog (it is linear, from the streaming radius to the low-res boundary, colour
+  from the time-of-day table) to scale with the new draw distance and match the sky's horizon
+  colour. Step 2 (needs 5C.0): a depth-based fog pass with exponential falloff, height falloff
+  (thicker near the ground and the sea) and a warm glow toward the sun at sunrise/sunset. Settings:
+  strength, distance. ✔ with screenshots at noon, sunset, night.
+- **5C.5 Bloom.** Bright parts glow: the night city's lit windows and street lights, neon, headlights,
+  the sun and sky at sunset. Threshold, then a downsample/upsample blur chain, added back before the
+  HUD (5C.0). Light scattered through the fog (5C.4) so lights glow more in thick air. Settings: on/off,
+  intensity, threshold, radius. ✔ with screenshots; cost measured at 1440p and on 5B hardware later.
+- **5C.6 (tentative, owner to decide) Dynamic lights.** Car headlights/taillights first (the car's
+  position and heading are known), street lights only once their positions are found (props are
+  likely merged into batch meshes; placement data or hand-recorded list). Cheap GTA VC-style
+  route: glow sprites, light pools on the ground, nearby lights tinting people and cars; full
+  per-pixel lights only with a shader-based renderer.
+
 **5B Android arm64 handhelds (the main target).** Same generated C + shim layer, built for arm64
 with clang, SDL2 for Android; GLES 3 backend for the GL bridge; DXT textures need a software
 decode path on GPUs without S3TC (Adreno/Mali); settings UI usable with a controller; touch

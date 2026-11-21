@@ -942,3 +942,20 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   (no type 7/8 control in the `--dump-hud` list), so RB / wheel / 1 / 2 have never switched weapons.
   Needs RE of that widget (5A.4/5A.7). Sprint (type 15) is a hidden button that appears while
   running (5A.1).
+
+### 5C draw distance and LOD (findings 2026-11-21, nothing changed yet)
+- The `draw_distance` setting is applied once, in the `loadPerformanceProfile` hook, so it needs a
+  restart (the F1 menu says so), and `apply_quality` is skipped entirely when `quality = phone`.
+  The owner's `work/user/settings.ini` has `quality = ultra`, `draw_distance = 0.5` (the minimum:
+  half the game's own distances).
+- It scales `gPhonePerf` +0x0C (texture streaming radius, 12000 in profile 1) and +0x10 (60000).
+  +0x10 is read by `GetLowResFarPlane()`, which is used as the **near** plane of the low-res city
+  (`CLowResCitySceneManager::setNearPlane`, in `drawAllWater`), i.e. where the detailed city hands
+  over to the LOD city. `DayTime::UpdateInfo` reads both +0x0C and `GetLowResFarPlane()`, apparently
+  for the fog start and range (decomp_perf.c; not yet checked against the GL fog calls).
+- Not touched by the setting: per-object LOD (`LODSceneNode`, `GS3DStuff::parseSceneNodeForLOD`),
+  terrain LOD (`CTerrainSceneNode::overrideLODDistance`), the camera far value
+  (`CCameraSceneNode::setFarValue`), and the separate global `g_perfConfigLowResFar` (role unknown).
+- **Open:** which of these causes the visible pop-in the owner sees, and how much guest memory a
+  longer detailed range needs. How to find out: log the far/LOD values per frame, A/B screenshots
+  from a fixed spot, Ghidra on the LODSceneNode distance check.
