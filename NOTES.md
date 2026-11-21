@@ -934,3 +934,11 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   - Debug aids: `GANGSTAR_TIME=HH:MM` pins the clock through the game's `DayTime::setTime` (hook on
     `DayTime::update`, which is in codegen's HOOKABLE list); `GANGSTAR_GL_LIGHT_TRACE=1` logs
     each distinct light/material/fog/texenv call; `GANGSTAR_TINT_DEBUG=1` reads back the tint stage.
+- **5A.0 frame-rate assumptions (2026-11-21):** "unlimited" fps now stops at 1,000 (the game's
+  clock is whole ms; the loading screen froze at ~3,000 fps, now loads at 999.9 fps and gameplay
+  follows). One-shot taps are time-based (≥ 80 ms and ≥ 2 frames, was 3 frames), and mouse-wheel
+  notches are queued and spaced (tap + 60 ms gap), so behaviour no longer depends on the frame rate.
+  **Finding:** the weapon selector (fist icon with `< >`, top right) is not a HUD VirtualButton
+  (no type 7/8 control in the `--dump-hud` list), so RB / wheel / 1 / 2 have never switched weapons.
+  Needs RE of that widget (5A.4/5A.7). Sprint (type 15) is a hidden button that appears while
+  running (5A.1).

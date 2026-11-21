@@ -83,7 +83,7 @@ public:
 private:
     bool to_game(int wx, int wy, int* gx, int* gy) const;
     void set_vtouch(int id, bool down, int x, int y);
-    GameInput gather();
+    GameInput gather(double dt);
     void drive_gameplay(const std::vector<mods::Control>& controls, const GameInput& gi, double dt);
     void drive_menus(const GameInput& gi, double dt);
     void key_edge(int code, bool now, bool* prev);
@@ -107,12 +107,14 @@ private:
     std::array<VTouch, 10> vt_{};           // pointer ids: 0 mouse, 1 stick, 2 camera, 3..9 buttons
     std::array<int, A_COUNT> act_ptr_{};     // pointer held for an action (0 = none)
     std::array<bool, A_COUNT> fired_{};      // the one-shot action already tapped during this press
-    std::array<int, A_COUNT> tap_frames_{};  // frames left of a one-shot tap
+    std::array<double, A_COUNT> tap_left_{};  // seconds left of a one-shot tap (see kTapSeconds)
+    std::array<int, A_COUNT> tap_frames_{};   // frames since that tap started (at least kTapMinFrames)
     float cam_x_ = 0, cam_y_ = 0;            // current camera drag point
     bool gameplay_ = false, driving_ = false;
     bool tilting_ = false;                   // virtual steering is active (tilt steering mode)
     float steer_ = 0;                        // current virtual steering (-1..1, slewed)
-    int wheel_next_ = 0, wheel_prev_ = 0;    // frames left of a mouse-wheel weapon press
+    int wheel_next_ = 0, wheel_prev_ = 0;    // mouse-wheel notches not yet sent (weapon next/prev)
+    double wheel_cooldown_ = 0;              // until the next notch may press (tap + release gap)
     bool cursor_on_ = false, cursor_pressed_ = false;
     float cursor_x_ = 0, cursor_y_ = 0;
     bool prev_back_ = false, prev_menu_ = false;

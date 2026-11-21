@@ -22,6 +22,12 @@ const char* kKeyUp = "Java_com_gameloft_android_GAND_GloftGMHP_ML_Gangster2_nati
 
 enum { AK_BACK = 4, AK_MENU = 82 };  // Android KeyEvent codes
 
+// One-shot buttons are a short virtual tap. Time-based, not frame-based: 3 frames were 150 ms at the
+// emulator's 20 fps but 6 ms at 500 fps, too short for the game to register (weapon switching).
+constexpr double kTapSeconds = 0.08;
+constexpr int kTapMinFrames = 2;
+constexpr double kTapGapSeconds = 0.06;  // released time between two queued taps (wheel notches)
+
 // Pointer ids handed to the game (Android pointer ids are small integers).
 enum { P_MOUSE = 0, P_STICK = 1, P_CAMERA = 2, P_FIRST_BUTTON = 3, P_LAST = 9 };
 
@@ -99,7 +105,9 @@ void Input::release_all() {
         mouse_down_ = false;
     }
     act_ptr_.fill(0);
+    tap_left_.fill(0);
     tap_frames_.fill(0);
+    wheel_next_ = wheel_prev_ = 0;
     cursor_pressed_ = false;
     rmb_down_ = false;
     rmb_dx_ = rmb_dy_ = 0;
@@ -236,8 +244,8 @@ void Input::handle(const SDL_Event& ev) {
             }
             break;
         case SDL_MOUSEWHEEL:
-            if (ev.wheel.y > 0) wheel_next_ = 4;
-            else if (ev.wheel.y < 0) wheel_prev_ = 4;
+            if (ev.wheel.y > 0) wheel_next_ = std::min(wheel_next_ + 1, 3);  // queue notches, a few at most
+            else if (ev.wheel.y < 0) wheel_prev_ = std::min(wheel_prev_ + 1, 3);
             break;
         case SDL_KEYDOWN:
             if (!ev.key.repeat) last_device_ = Device::Keyboard;
@@ -266,7 +274,7 @@ void Input::handle(const SDL_Event& ev) {
 }
 
 // ---- per-frame -----------------------------------------------------------------------------------
-GameInput Input::gather() {
+GameInput Input::gather(double dt) {
     GameInput gi;
     const Uint8* ks = SDL_GetKeyboardState(nullptr);
     auto pb = [&](SDL_GameControllerButton b) { return spad_[b] || (pad_ && SDL_GameControllerGetButton(pad_, b)); };
@@ -319,10 +327,16 @@ GameInput Input::gather() {
     gi.act[A_MAP] |= k(SDL_SCANCODE_M);
     gi.act[A_RADIO] |= k(SDL_SCANCODE_R);
     gi.act[A_RADIO_NEXT] |= k(SDL_SCANCODE_T);
-    gi.act[A_WEAPON_PREV] |= k(SDL_SCANCODE_1) || wheel_prev_ > 0;
-    gi.act[A_WEAPON_NEXT] |= k(SDL_SCANCODE_2) || wheel_next_ > 0;
-    if (wheel_prev_ > 0) --wheel_prev_;
-    if (wheel_next_ > 0) --wheel_next_;
+    gi.act[A_WEAPON_PREV] |= k(SDL_SCANCODE_1);
+    gi.act[A_WEAPON_NEXT] |= k(SDL_SCANCODE_2);
+    // Mouse wheel: each notch is one press (one frame "down" starts a one-shot tap), spaced so the
+    // tap ends and the button is released before the next notch presses again.
+    wheel_cooldown_ = std::max(0.0, wheel_cooldown_ - dt);
+    if (wheel_cooldown_ == 0 && (wheel_next_ > 0 || wheel_prev_ > 0)) {
+        if (wheel_next_ > 0) { gi.act[A_WEAPON_NEXT] = true; --wheel_next_; }
+        else { gi.act[A_WEAPON_PREV] = true; --wheel_prev_; }
+        wheel_cooldown_ = kTapSeconds + kTapGapSeconds;
+    }
     gi.act[A_ACCELERATE] |= driving_ && (k(SDL_SCANCODE_W) || k(SDL_SCANCODE_UP));
     gi.act[A_BRAKE] |= driving_ && (k(SDL_SCANCODE_S) || k(SDL_SCANCODE_DOWN));
     gi.act[A_CONFIRM] |= k(SDL_SCANCODE_RETURN) || k(SDL_SCANCODE_KP_ENTER);
@@ -398,9 +412,12 @@ void Input::drive_gameplay(const std::vector<mods::Control>& controls, const Gam
             // appears while still held ("hold Y to get into the car once in range").
             const bool avail = find_type(kActionTypes[a]) != nullptr;
             if (!gi.act[a]) fired_[a] = false;
-            else if (!fired_[a] && avail) { tap_frames_[a] = 3; fired_[a] = true; }
-            want = tap_frames_[a] > 0;
-            if (tap_frames_[a] > 0) --tap_frames_[a];
+            else if (!fired_[a] && avail) { tap_left_[a] = kTapSeconds; tap_frames_[a] = 0; fired_[a] = true; }
+            want = tap_left_[a] > 0 || (fired_[a] && tap_frames_[a] < kTapMinFrames);
+            if (want) {
+                tap_left_[a] = std::max(0.0, tap_left_[a] - dt);
+                ++tap_frames_[a];
+            }
         }
         const mods::Control* c = want ? find_type(kActionTypes[a]) : nullptr;
         int& p = act_ptr_[a];
@@ -472,6 +489,7 @@ void Input::update(double dt) {
     if (now_gameplay != gameplay_ || now_driving != driving_) {
         for (int id = P_STICK; id <= P_LAST; ++id) set_vtouch(id, false, 0, 0);
         act_ptr_.fill(0);
+        tap_left_.fill(0);
         tap_frames_.fill(0);  // (fired_ is kept: a still-held Y must not exit the car it just entered)
         mods::set_virtual_steering(false, 0);
         tilting_ = false;
@@ -485,7 +503,7 @@ void Input::update(double dt) {
         gameplay_ = now_gameplay;
         driving_ = now_driving;
     }
-    GameInput gi = gather();
+    GameInput gi = gather(dt);
     if (suppress_) {  // after the settings menu closed: wait until everything is released
         bool any = gi.mx != 0 || gi.my != 0 || gi.cx != 0 || gi.cy != 0;
         for (bool b : gi.act) any = any || b;

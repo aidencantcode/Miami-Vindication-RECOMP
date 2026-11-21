@@ -517,6 +517,11 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 fps_limit = SDL_GetCurrentDisplayMode(std::max(0, SDL_GetWindowDisplayIndex(win)), &dm) == 0 &&
                                     dm.refresh_rate > 0 ? dm.refresh_rate : 60;
             }
+            // "Unlimited" still stops at 1000 fps: the game's clock (glitch::os::Timer) counts whole
+            // milliseconds, and with frames < 1 ms apart its loading screen stopped advancing
+            // (seen at ~3,000 fps: no updates, no draws, 30+ s).
+            constexpr int kMaxFps = 1000;
+            if (fps_limit == 0 || fps_limit > kMaxFps) fps_limit = kMaxFps;
             if (fps_limit > 0) {
                 // Fixed cadence: each deadline is the previous one + one period (so per-frame overhead
                 // doesn't drift the rate below the limit); after a slow frame, start over from now.
