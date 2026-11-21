@@ -976,10 +976,21 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
 - Game fog: `GL_LINEAR`, start 6000 (streaming radius), end 46000, colour from the time-of-day
   table (night 0.129/0.129/0.212). The near city ends at 6000, so **it is never fogged**; the LOD
   city gets at most ~60% at its end, so its cut-off against the sky stays visible.
-- Lighting at night (from `GANGSTAR_GL_LIGHT_TRACE`): light 0 direction (0.374, -0.834, 0.406),
-  ambient ≈ 0.21/0.20/0.37 (drifts to ~0.41 blue), diffuse 0.38/0.63/0.80; materials ambient and
-  diffuse 0.584, **emission 0.32 / 0.25 / 0.19** (a constant glow on whatever uses them). This is
-  why people look bright at night (5C.1).
+- Lighting: the game sets light 0 and materials every frame (night: ambient ≈ 0.21/0.20/0.37,
+  diffuse 0.38/0.63/0.80, material emission up to 0.32), but **never enables `GL_LIGHTING`**
+  (checked with `glIsEnabled` per draw). People, cars and props are drawn with colour arrays +
+  `GL_COLOR_MATERIAL`: the engine lights them on the CPU and passes vertex colours. World batches
+  have normals but no colour array, texture env MODULATE.
+
+### 5C.1 People and cars follow the time of day (done 2026-11-22)
+- The tint stage now has two colours: world textures showing their day image get the world tint
+  (as before); every other 3D draw of the scene (texture not managed by night_textures) gets the
+  actor tint = world tint lifted toward 1 by `[graphics] night_people_lift` (default 0.35).
+  Never tinted: world textures showing their night image, the sky (depth range [0.2, 1] with the
+  camera's near plane 50; the far city uses the streaming radius as near plane), the HUD
+  (orthographic) and additive draws (blend dst `GL_ONE`: lamp and headlight glows).
+- night_textures reports Day / Night / None per texture (`gles1::WorldTex`) so props it already
+  darkens are not darkened twice. Verified at 23:30, 18:15, 05:00, 12:00 (unchanged).
 
 ### 5C.4 Atmospheric fog (done 2026-11-21, step 1)
 - `[graphics] fog = atmospheric` (default) | `game`, `fog_strength` (default 1.5). The bridge keeps

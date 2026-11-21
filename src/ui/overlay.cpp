@@ -224,6 +224,12 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
             ImGui::TextDisabled("Filtering changes apply immediately.");
             ch |= ImGui::Checkbox("Restored day/night look (night city, sunrise and sunset)", &s.night_textures);
             ImGui::TextDisabled("Night uses the game's own unused night textures; dawn and dusk tint the city to match the sky.");
+            if (s.night_textures) {
+                ch |= ImGui::SliderFloat("People and cars at night", &s.night_people_lift, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("0 = as dark as the city around them, 1 = as bright as the phone drew them.\n"
+                                      "A little above 0 keeps people readable in the dark.");
+            }
             ch |= combo_str("Fog", &s.fog,
                             {{"atmospheric", "Atmospheric (haze by distance, hides the horizon)"},
                              {"game", "Game (thin, only on the far city)"}});

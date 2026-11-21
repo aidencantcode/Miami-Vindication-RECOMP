@@ -183,7 +183,8 @@ std::vector<Mat4>* matrix_stack() {
     return g_matrix_mode == GL_PROJECTION ? &g_proj : g_matrix_mode == GL_MODELVIEW ? &g_mv : nullptr;
 }
 bool g_fog_on = false, g_depth_test = false, g_lighting = false, g_blend = false, g_depth_write = true;
-float g_depth_range_far = 1;  // glDepthRange far end: the near city is drawn in [0, 0.2], sky and far city in [0.2, 1]
+float g_depth_range_near = 0, g_depth_range_far = 1;  // glDepthRange: near city [0, 0.2], sky and far city [0.2, 1]
+GLenum g_blend_dst = GL_ZERO;
 bool g_fog_forced = false;  // atmospheric fog enabled GL_FOG for this draw (the game had it off)
 void track_cap(GLenum cap, bool on) {
     switch (cap) {
@@ -201,6 +202,9 @@ float proj_near(const Mat4& p) { return -p.m[14] / (p.m[10] + 1); }
 float proj_far(const Mat4& p) { return std::abs(p.m[10] - 1) < 1e-6f ? INFINITY : -p.m[14] / (p.m[10] - 1); }
 // A finite 3D projection (the city, people, cars), not the sky's infinite one and not the HUD's ortho.
 bool is_world_projection(const Mat4& p) { return is_perspective(p) && std::abs(p.m[10]) > 1.0005f; }
+// The sky dome: drawn in the far depth range ([0.2, 1], like the far city) but with the camera's near
+// plane (50) instead of the far city's (the streaming radius, thousands).
+bool is_sky_draw() { return g_depth_range_near > 0.1f && proj_near(g_proj.back()) < 1000.0f; }
 
 // GANGSTAR_GL_FRAME_TRACE=<frame>: log that frame's structure (clears, targets, projections, and
 // runs of draws with the same state), to see where the 3D scene ends and the HUD starts.
@@ -226,6 +230,8 @@ void trace_event(const char* fmt, ...) {
     va_end(ap);
     LOG("frame-trace %s", buf);
 }
+int active_unit();               // defined with the texture state below
+bool is_world_tex(GLuint tex);
 void trace_draw(GLuint tex0, int count) {
     if (!frame_tracing()) return;
     const Mat4& p = g_proj.back();
@@ -237,8 +243,17 @@ void trace_draw(GLuint tex0, int count) {
     }
     std::string sig = std::string(buf) + (g_fog_on ? " fog" : "") + (g_depth_test ? " ztest" : "") +
                       (g_depth_write ? " zwrite" : "") + (g_lighting ? " lit" : "") + (g_blend ? " blend" : "");
-    (void)count;
-    (void)tex0;
+    {  // real GL state, to check the shadows and see how each kind of object is drawn
+        GLint env = 0;
+        p_glActiveTexture(GL_TEXTURE0);
+        glGetTexEnviv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, &env);
+        p_glActiveTexture(GL_TEXTURE0 + active_unit());
+        char more[160];
+        std::snprintf(more, sizeof more, " | gl:%s%s%s%s env0=%#x tex0=%u%s n=%d", glIsEnabled(GL_LIGHTING) ? " LIT" : "",
+                      glIsEnabled(GL_COLOR_ARRAY) ? " colarr" : "", glIsEnabled(GL_NORMAL_ARRAY) ? " normals" : "",
+                      glIsEnabled(GL_COLOR_MATERIAL) ? " colmat" : "", unsigned(env), tex0, is_world_tex(tex0) ? " world" : "", count);
+        sig += more;
+    }
     if (sig != g_trace_sig) {
         trace_flush();
         g_trace_sig = sig;
@@ -261,7 +276,7 @@ H(disable) { GLenum cap = a.u32(); track_cap(cap, false); glDisable(cap); }
 H(enable_cs) { glEnableClientState(a.u32()); }
 H(disable_cs) { glDisableClientState(a.u32()); }
 H(alpha_func) { GLenum f = a.u32(); float r = a.f32(); glAlphaFunc(f, r); }
-H(blend_func) { GLenum s = a.u32(), d = a.u32(); glBlendFunc(s, d); }
+H(blend_func) { GLenum s = a.u32(), d = a.u32(); g_blend_dst = d; glBlendFunc(s, d); }
 H(blend_equation) { p_glBlendEquation(a.u32()); }
 H(color_mask) { GLboolean r = GLboolean(a.u32()), g = GLboolean(a.u32()), b = GLboolean(a.u32()), al = GLboolean(a.u32()); glColorMask(r, g, b, al); }
 H(cull_face) { glCullFace(a.u32()); }
@@ -271,6 +286,7 @@ H(depth_mask) { GLboolean m = GLboolean(a.u32()); g_depth_write = m != 0; glDept
 H(depth_rangef) {
     float n = a.f32(), f = a.f32();
     trace_event("depth range %.3f %.3f", n, f);
+    g_depth_range_near = n;
     g_depth_range_far = f;
     glDepthRange(n, f);
 }
@@ -542,6 +558,7 @@ TextureFilter g_filter_mode = TextureFilter::Game;
 GLuint g_bound_2d[8] = {};                              // GL_TEXTURE_2D binding per texture unit
 int g_unit = 0;
 GLuint bound_tex0() { return g_bound_2d[0]; }
+int active_unit() { return g_unit; }
 
 bool is_mip(GLint f) {
     return f == GL_NEAREST_MIPMAP_NEAREST || f == GL_LINEAR_MIPMAP_NEAREST || f == GL_NEAREST_MIPMAP_LINEAR ||
@@ -576,14 +593,20 @@ void reapply_all_filters() {
 
 TextureObserver g_tex_observer;
 
-// ---- world tint (time of day, game/night_textures) ----------------------------------------------
-// An extra fixed-function texture stage after the game's own: MODULATE(previous, constant colour),
-// enabled only for draws whose unit-0 texture is a registered world texture (city, ground), so
-// characters, cars, the sky and the HUD keep the game's own colours.
-float g_tint[3] = {1, 1, 1};
-std::unordered_set<GLuint> g_world_tex;
+// ---- time-of-day tint (game/night_textures) ------------------------------------------------------
+// An extra fixed-function texture stage after the game's own: MODULATE(previous, constant colour).
+//  - World draws (unit-0 texture registered as a world texture showing its DAY image): g_tint.
+//  - Actor draws (people, cars, anything else in the 3D scene whose texture the night module does
+//    not manage): g_actor_tint. The game never enables GL lighting; people and cars carry vertex
+//    colours the engine lights on the CPU with a night light tuned for the daylight city.
+//  - Not tinted: world textures showing their night image (already final), the sky, the HUD
+//    (orthographic) and additive glows (lamps, headlights, effects).
+float g_tint[3] = {1, 1, 1}, g_actor_tint[3] = {1, 1, 1};
+std::unordered_map<GLuint, WorldTex> g_world_tex;
+bool is_world_tex(GLuint tex) { return g_world_tex.count(tex) != 0; }
 int g_tint_unit = -1;  // fixed-function unit used for the stage (-1: none spare)
-bool g_tint_on = false, g_tint_dirty = true;
+bool g_tint_on = false;
+float g_stage_color[3] = {-1, -1, -1};  // the colour currently set on the stage
 
 int tint_unit() { return g_tint_unit; }
 
@@ -614,18 +637,33 @@ void tint_init() {
     LOG("GL: time-of-day tint on texture unit %d", g_tint_unit);
 }
 
+bool is_identity(const float* c) { return std::abs(c[0] - 1) + std::abs(c[1] - 1) + std::abs(c[2] - 1) < 0.003f; }
+// A 3D draw of the scene (not the sky, not the HUD, not an additive glow).
+bool is_actor_draw() {
+    const Mat4& p = g_proj.back();
+    if (!is_world_projection(p) || is_sky_draw()) return false;
+    return !(g_blend && g_blend_dst == GL_ONE);
+}
+
 void tint_before_draw() {
     if (g_tint_unit < 0) return;
-    const bool tinted = std::abs(g_tint[0] - 1) + std::abs(g_tint[1] - 1) + std::abs(g_tint[2] - 1) > 0.003f;
-    const bool want = tinted && g_world_tex.count(g_bound_2d[0]) != 0;
-    if (want == g_tint_on && !(want && g_tint_dirty)) return;
+    const float* col = nullptr;
+    if (auto it = g_world_tex.find(g_bound_2d[0]); it != g_world_tex.end()) {
+        if (it->second == WorldTex::Day) col = g_tint;
+    } else if (is_actor_draw()) {
+        col = g_actor_tint;
+    }
+    if (col && is_identity(col)) col = nullptr;
+    const bool want = col != nullptr;
+    const bool recolor = want && std::memcmp(col, g_stage_color, sizeof g_stage_color) != 0;
+    if (want == g_tint_on && !recolor) return;
     p_glActiveTexture(GL_TEXTURE0 + g_tint_unit);
     if (want) {
         if (!g_tint_on) glEnable(GL_TEXTURE_2D);
-        if (g_tint_dirty) {
-            const GLfloat c[4] = {g_tint[0], g_tint[1], g_tint[2], 1};
+        if (recolor) {
+            const GLfloat c[4] = {col[0], col[1], col[2], 1};
             glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, c);
-            g_tint_dirty = false;
+            std::memcpy(g_stage_color, col, sizeof g_stage_color);
         }
     } else {
         glDisable(GL_TEXTURE_2D);
@@ -864,17 +902,20 @@ bool vfb_reconfigure(int width, int height, int msaa) {
 
 void set_texture_observer(TextureObserver obs) { g_tex_observer = std::move(obs); }
 
-void set_world_texture(unsigned tex, bool world) {
-    if (world) g_world_tex.insert(tex);
-    else g_world_tex.erase(tex);
+void set_world_texture(unsigned tex, WorldTex state) {
+    if (state == WorldTex::None) g_world_tex.erase(tex);
+    else g_world_tex[tex] = state;
+}
+
+void set_actor_tint(float r, float g, float b) {
+    g_actor_tint[0] = std::clamp(r, 0.0f, 1.0f);
+    g_actor_tint[1] = std::clamp(g, 0.0f, 1.0f);
+    g_actor_tint[2] = std::clamp(b, 0.0f, 1.0f);
 }
 
 void set_world_tint(float r, float g, float b) {
     const float c[3] = {std::clamp(r, 0.0f, 1.0f), std::clamp(g, 0.0f, 1.0f), std::clamp(b, 0.0f, 1.0f)};
-    if (c[0] != g_tint[0] || c[1] != g_tint[1] || c[2] != g_tint[2]) {
-        std::copy(c, c + 3, g_tint);
-        g_tint_dirty = true;
-    }
+    std::copy(c, c + 3, g_tint);
 }
 
 void replace_compressed_levels(unsigned tex, unsigned format, const std::vector<CompressedLevel>& levels) {

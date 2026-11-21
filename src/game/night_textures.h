@@ -19,6 +19,7 @@ namespace nighttex {
 bool init(const std::filesystem::path& data_dir);
 // Once per frame, before the game draws: DayTime state (3 = night) and minute of the game day.
 // Swaps night images in and out and sets the dawn/dusk tint; enabled=false restores the original.
-void update(bool enabled, int state, int minute);
+// people_lift: 0 = people and cars as dark as the city at night, 1 = as bright as the game drew them.
+void update(bool enabled, int state, int minute, float people_lift);
 
 }  // namespace nighttex

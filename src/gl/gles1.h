@@ -48,10 +48,14 @@ void set_texture_observer(TextureObserver obs);
 struct CompressedLevel { int w, h; const uint8_t* data; int size; };
 // Re-specify mip levels of an existing texture; the game's texture bindings are left as they were.
 void replace_compressed_levels(unsigned tex, unsigned format, const std::vector<CompressedLevel>& levels);
-// Time-of-day tint: draws whose unit-0 texture is a registered world texture get multiplied by
-// the tint colour (1,1,1 = off). Everything else (characters, cars, sky, HUD) is untouched.
-void set_world_texture(unsigned tex, bool world);
+// Time-of-day tint (1,1,1 = off). World textures (managed by game/night_textures) showing their day
+// image get the world tint; ones showing their night image are left alone. Every other 3D draw of
+// the scene (people, cars, unmanaged props) gets the actor tint; the sky, the HUD and additive
+// glows are never tinted.
+enum class WorldTex { None, Day, Night };
+void set_world_texture(unsigned tex, WorldTex state);
 void set_world_tint(float r, float g, float b);
+void set_actor_tint(float r, float g, float b);
 
 // Atmospheric fog. The game's own fog is linear from the texture streaming radius to past the far
 // city, so the detailed city is never fogged. Atmospheric mode keeps the game's time-of-day fog

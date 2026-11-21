@@ -173,12 +173,12 @@ void on_upload(unsigned tex, int level, unsigned format, int w, int h, const uin
     if (level == 0) {
         auto it = g_by_fp.find(fingerprint(data, size, w, h));
         if (it == g_by_fp.end()) {
-            if (g_tex.erase(tex)) gles1::set_world_texture(tex, false);  // the id now holds something else
+            if (g_tex.erase(tex)) gles1::set_world_texture(tex, gles1::WorldTex::None);  // the id now holds something else
             return;
         }
         Tex& t = g_tex[tex];
         t = {it->second.pair, it->second.base_level, 1, format, false};
-        gles1::set_world_texture(tex, true);  // shows its day image: gets the time-of-day tint
+        gles1::set_world_texture(tex, gles1::WorldTex::Day);  // shows its day image: gets the time-of-day tint
         if (g_night) g_queue.push_back(tex);  // loaded during the night: give it its night image
     } else if (auto it = g_tex.find(tex); it != g_tex.end()) {
         it->second.levels = std::max(it->second.levels, level + 1);
@@ -194,7 +194,7 @@ void swap(unsigned tex, bool night) {
     auto dds = read_dds(file, true);
     if (!dds || t.base_level + t.levels > dds->levels) {
         LOG("night textures: cannot use %s", file.filename().string().c_str());
-        gles1::set_world_texture(tex, false);
+        gles1::set_world_texture(tex, gles1::WorldTex::None);
         g_tex.erase(it);
         return;
     }
@@ -208,7 +208,7 @@ void swap(unsigned tex, bool night) {
     }
     gles1::replace_compressed_levels(tex, t.format, levels);
     t.night = night;
-    gles1::set_world_texture(tex, !night);  // night images are final; day images follow the tint
+    gles1::set_world_texture(tex, night ? gles1::WorldTex::Night : gles1::WorldTex::Day);  // night images are final
     ++g_swaps;
 }
 
@@ -221,7 +221,7 @@ bool init(const fs::path& data_dir) {
     obs.on_compressed_upload = on_upload;
     obs.on_delete = [](unsigned tex) {
         g_tex.erase(tex);
-        gles1::set_world_texture(tex, false);
+        gles1::set_world_texture(tex, gles1::WorldTex::None);
     };
     gles1::set_texture_observer(std::move(obs));
     g_ready = !g_by_fp.empty();
@@ -263,13 +263,17 @@ void tint_at(int minute, float* c) {
     }
 }
 
-void update(bool enabled, int state, int minute) {
+void update(bool enabled, int state, int minute, float people_lift) {
     if (!g_ready) return;
     const bool night = enabled && state == 3;
     float c[3] = {1, 1, 1};
     if (night) std::copy(kNightTint, kNightTint + 3, c);
     else if (enabled) tint_at(((minute % 1440) + 1440) % 1440, c);
     gles1::set_world_tint(c[0], c[1], c[2]);
+    // People and cars: the same colour, lifted toward 1 so they stay readable (their vertex colours
+    // already carry the game's own night light).
+    const float lift = std::clamp(people_lift, 0.0f, 1.0f);
+    gles1::set_actor_tint(c[0] + (1 - c[0]) * lift, c[1] + (1 - c[1]) * lift, c[2] + (1 - c[2]) * lift);
     if (night != g_night) {
         g_night = night;
         g_queue.clear();
