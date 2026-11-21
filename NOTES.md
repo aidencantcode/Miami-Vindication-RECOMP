@@ -943,6 +943,17 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   Needs RE of that widget (5A.4/5A.7). Sprint (type 15) is a hidden button that appears while
   running (5A.1).
 
+### 5A.1 Sprint forward/back (fixed 2026-11-22)
+- `AnalogStick::processTouch` (decomp_input.c): drag in screen pixels → 480×320 units as
+  dx / sy and dy / sx with sx = w/480, sy = h/320 (**swapped**; harmless on a 480×320 phone), then
+  clamps to the radius at +0x5C (49) and stores magnitude 0..1 at +0x68 (1.0 when clamped);
+  +0x84 = axis mode (0 x only, 1 y only, 2 both). Running, and with it the sprint button
+  (ButtonType 15, HUD field +0x70), needs full deflection.
+- Our virtual stick used one pixel radius (84 px at 854×480): 84/1.5 = 56 sideways but
+  84/1.78 = 47.2 < 49 forward/back, so W/S never ran fast enough for the sprint button to appear.
+  Now the touch is placed in the game's units (radius × 1.1 × the swapped scale per axis);
+  `mods::Control::stick_radius` reads +0x5C. Verified forward, back, diagonal, sideways.
+
 ### 5C draw distance and LOD (findings 2026-11-21, nothing changed yet)
 - The `draw_distance` setting is applied once, in the `loadPerformanceProfile` hook, so it needs a
   restart (the F1 menu says so), and `apply_quality` is skipped entirely when `quality = phone`.

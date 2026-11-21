@@ -349,6 +349,7 @@ std::vector<Control> controls(rt::Runtime& rt, int screen_w, int screen_h) {
                   f32_at(obj + 0x10) * sx, f32_at(obj + 0x14) * sy, f32_at(obj + 0x18) * sx, f32_at(obj + 0x1c) * sy};
         if (!std::strcmp(f.kind, "VirtualButton") || !std::strcmp(f.kind, "AnimatedButton"))
             c.type = int32_t(m.r32(obj + 0x58));
+        if (!std::strcmp(f.kind, "AnalogStick")) c.stick_radius = int32_t(m.r32(obj + 0x5c));
         out.push_back(c);
     }
     return out;
@@ -358,8 +359,8 @@ void log_controls(rt::Runtime& rt, int screen_w, int screen_h) {
     auto cs = controls(rt, screen_w, screen_h);
     LOG("HUD controls (%zu, screen %dx%d):", cs.size(), screen_w, screen_h);
     for (const Control& c : cs)
-        LOG("  +%02x %-14s type %2d %s rect (%4.0f,%4.0f)-(%4.0f,%4.0f)", c.field, c.kind, c.type,
-            c.visible ? "VISIBLE" : "hidden ", c.x0, c.y0, c.x1, c.y1);
+        LOG("  +%02x %-14s type %2d %s rect (%4.0f,%4.0f)-(%4.0f,%4.0f) radius %d", c.field, c.kind, c.type,
+            c.visible ? "VISIBLE" : "hidden ", c.x0, c.y0, c.x1, c.y1, c.stick_radius);
 }
 
 }  // namespace mods

@@ -392,10 +392,22 @@ void Input::drive_gameplay(const std::vector<mods::Control>& controls, const Gam
         else set_vtouch(P_STICK, true, int(std::lround(cx + gi.mx * r)), int(cy));
     } else if (stick && (gi.mx != 0 || gi.my != 0)) {
         const float cx = (stick->x0 + stick->x1) * 0.5f, cy = (stick->y0 + stick->y1) * 0.5f;
-        const float r = std::min(stick->x1 - stick->x0, stick->y1 - stick->y0) * 0.4f;
+        // AnalogStick::processTouch converts the drag to 480x320 units with the screen scales SWAPPED
+        // (dx / (h/320), dy / (w/480)), then clamps to its radius (+0x5C); "running" (and with it the
+        // sprint button) needs full deflection. With one pixel radius for both axes, forward/back
+        // stopped short of it on wide screens (854 px: 47 units forward vs 56 sideways). So place the
+        // touch in the game's own units, 10% past the edge at full deflection, like a thumb would.
+        float rx, ry;
+        if (stick->stick_radius > 0) {
+            const float sx = game_w_ / 480.0f, sy = game_h_ / 320.0f, r = stick->stick_radius * 1.1f;
+            rx = r * sy;
+            ry = r * sx;
+        } else {
+            rx = ry = std::min(stick->x1 - stick->x0, stick->y1 - stick->y0) * 0.4f;
+        }
         // Like a finger: land on the knob first, then drag (the stick only grabs touches that start on it).
         if (!vt_[P_STICK].down) set_vtouch(P_STICK, true, int(cx), int(cy));
-        else set_vtouch(P_STICK, true, int(std::lround(cx + gi.mx * r)), int(std::lround(cy + gi.my * r)));
+        else set_vtouch(P_STICK, true, int(std::lround(cx + gi.mx * rx)), int(std::lround(cy + gi.my * ry)));
     } else {
         set_vtouch(P_STICK, false, 0, 0);
     }

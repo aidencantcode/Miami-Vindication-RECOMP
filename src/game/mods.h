@@ -38,6 +38,7 @@ struct Control {
     int type;           // VirtualButton ButtonType (-1 for non-buttons)
     bool visible;
     float x0, y0, x1, y1;  // rectangle in game screen pixels
+    int stick_radius = 0;  // AnalogStick: full deflection in 480x320 units (+0x5C); 0 otherwise
 };
 // CHudManager::SteeringMode (CHudManager+0x1C); -1 before the HUD exists.
 // 0x800000 = tilt (DrivingControlHandler::handleAcceleration steers from the accelerometer);

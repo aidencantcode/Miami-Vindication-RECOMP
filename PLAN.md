@@ -289,6 +289,10 @@ Suggested order: shared root causes first (5A.0), then audio, then input, then t
   "sprint" (stick magnitude/angle, or the sprint button only counting along one axis). Find the
   game's sprint condition (Ghidra: the player's on-foot control handler) and feed it what it
   expects. ✔ when sprint works in all 8 directions with keyboard and stick.
+  **Done 2026-11-22**: `AnalogStick::processTouch` divides dx by the vertical screen scale and dy by
+  the horizontal one (swapped), then clamps to its radius (49 units); the sprint button only shows
+  at full deflection. Our 84 px push gave 56 units sideways but 47 forward. The virtual touch is now
+  placed in the game's own units, 10% past the radius (NOTES §5A.1).
 - **5A.2 Radio box clipped** on its right edge (known since Phase 3; not glScissor, not culling,
   not width). Next suspects: the sprite/gameswf path that draws the frame (mirrored right half,
   atlas UVs). ✔ when the box is complete at 800, 854 and 16:9 widths.
