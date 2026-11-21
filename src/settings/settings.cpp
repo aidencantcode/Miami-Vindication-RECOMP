@@ -70,6 +70,7 @@ const std::vector<Field>& fields() {
         F("controls", "mouse_look", &Settings::mouse_look),
         F("controls", "camera_mode", &Settings::camera_mode),
         F("controls", "stick_deadzone", &Settings::stick_deadzone),
+        F("controls", "tap_to_target", &Settings::tap_to_target),
         F("audio", "master_volume", &Settings::master_volume),
         F("audio", "music_volume", &Settings::music_volume),
         F("audio", "sfx_volume", &Settings::sfx_volume),

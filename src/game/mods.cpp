@@ -56,6 +56,28 @@ float f32_at(uint32_t a) {
     return f;
 }
 
+// ---- aiming (Phase 5A.4, NOTES §5A.4) ----------------------------------------------------------
+// The phone aims two ways: a short tap on empty screen locks onto whatever is under it
+// (HudScreen::processTouchRelease -> tappedTarget -> Player::lockTarget(t, true)), and while the
+// weapon is out Player::updateLockTarget locks automatically onto Character::getAttackableTarget()
+// (the nearest non-friendly character it can attack, preferring ones in front). On PC both fired
+// at random: camera drags that barely move are released as taps at the drag anchor, and shooting
+// grabbed the nearest target. PC scheme: no taps, no automatic lock; holding auto-aim (LT / middle
+// mouse) asks the game for its target and locks it like a tap does, releasing unlocks.
+bool g_pc_aim = true;            // false: the phone's behaviour (touchscreens)
+bool g_auto_aim = false, g_auto_aim_was = false;
+bool g_allow_auto_target = false;  // our own getAttackableTarget call
+uint32_t g_gat_self = 0;           // getAttackableTarget's this (pre -> post)
+double g_reacquire = 0;            // seconds until the next auto-aim search
+int g_weapon_steps = 0;            // queued weapon switches (+next / -previous)
+int g_screen_w = 800, g_screen_h = 480;  // the game's logical screen (from controls())
+
+uint32_t player_obj(rt::Runtime& r) {
+    static const uint32_t var = r.lib_object("_ZN6Player8s_playerE");
+    return r.mem().r32(var);
+}
+constexpr uint32_t kPlayerTarget = 0x650;  // Player: locked target (Player::_GetTarget)
+
 void apply_quality(const settings::Settings& s, cpu::Cpu& c) {
     auto& m = c.rt().mem();
     const uint32_t p = c.rt().lib_object("gPhonePerf");
@@ -287,6 +309,27 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
         }, nullptr});
     }
 
+    // ---- aiming (see the top of this file) --------------------------------------------------------
+    g_pc_aim = !s.tap_to_target;
+    // A release always counts as a drag (moved 100 px), so it never becomes a tap-to-target.
+    rt.hook_function("_ZN9HudScreen19processTouchReleaseEv", {[](cpu::Cpu& c) {
+        if (g_pc_aim) c.rt().mem().w32(c.reg(cpu::R0) + 0x6c, 100);
+        return false;
+    }, nullptr});
+    // The player's automatic target: none unless auto-aim is asking.
+    rt.hook_function("_ZN9Character19getAttackableTargetEv", {
+        [](cpu::Cpu& c) {
+            g_gat_self = c.reg(cpu::R0);
+            return false;
+        },
+        [](cpu::Cpu& c) {
+            const uint32_t self = g_gat_self;
+            g_gat_self = 0;
+            if (!g_pc_aim || g_allow_auto_target) return;
+            const uint32_t p = player_obj(c.rt());
+            if (p && self == p + 4) c.set_reg(cpu::R0, 0);
+        }});
+
     // ---- virtual steering (tilt mode) -------------------------------------------------------------
     rt.hook_function("_ZN21DrivingControlHandler18handleAccelerationEPK14EvAcceleration", {[](cpu::Cpu& c) {
         if (!g_steer_on) return false;  // real accelerometer: the game's own code
@@ -305,6 +348,64 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
 }
 
 void set_camera_mode(const std::string& mode) { g_camera_mode = mode; }
+
+// The person or vehicle at the screen centre: the phone's tap picker (HudScreen::tappedTarget: a ray
+// from the camera through the point, hit boxes that grow with distance; people first, then
+// vehicles; never the dead). Its `this` is not used, so any pointer will do.
+uint32_t target_at_screen_center(cpu::Cpu& c) {
+    auto& r = c.rt();
+    static uint32_t scratch = 0;
+    if (!scratch) scratch = r.heap().alloc(32);
+    const int32_t pos[2] = {g_screen_w / 2, g_screen_h / 2};
+    const float zero[3] = {0, 0, 0};
+    r.mem().write(scratch, pos, 8);
+    r.mem().write(scratch + 16, zero, 12);
+    return uint32_t(c.call(r.lib_func("_ZNK9HudScreen12tappedTargetERKN6glitch4core10position2dIiEERKNS1_8vector3dIfEE"),
+                           {g_hud ? g_hud : scratch, scratch, scratch + 16}));
+}
+
+void set_aim_input(bool auto_aim) { g_auto_aim = auto_aim; }
+void switch_weapon(int step) { g_weapon_steps = std::clamp(g_weapon_steps + step, -3, 3); }
+
+void frame(cpu::Cpu& c, double dt) {
+    auto& r = c.rt();
+    auto& m = r.mem();
+    const uint32_t p = player_obj(r);
+    if (!p) {
+        g_weapon_steps = 0;
+        return;
+    }
+    // Weapon switching: what the weapon selector's < > buttons call (handleSwitchWeaponButton).
+    while (g_weapon_steps != 0) {
+        const int step = g_weapon_steps > 0 ? 1 : -1;
+        g_weapon_steps -= step;
+        c.call(r.lib_func("_ZN6Player12switchWeaponEib"), {p, uint32_t(step), 1});
+        LOG("weapon: switch %+d", step);
+    }
+    if (!g_pc_aim) return;
+    // Auto-aim: lock the game's own pick (as a tap would) while held; retry while nothing is locked.
+    const uint32_t target = m.r32(p + kPlayerTarget);
+    if (g_auto_aim) {
+        g_reacquire -= dt;
+        if (!target && g_reacquire <= 0) {
+            g_allow_auto_target = true;
+            uint32_t t = uint32_t(c.call(r.lib_func("_ZN9Character19getAttackableTargetEv"), {p + 4}));
+            g_allow_auto_target = false;
+            const char* how = "nearest attackable";
+            if (!t) t = target_at_screen_center(c), how = "at the screen centre";
+            if (t) {
+                c.call(r.lib_func("_ZN6Player10lockTargetEP11LevelObjectb"), {p, t, 1});
+                LOG("aim: auto-aim locked %08x (%s; now %08x)", t, how, m.r32(p + kPlayerTarget));
+            }
+            g_reacquire = 0.25;
+        }
+    } else if (g_auto_aim_was && target) {
+        c.call(r.lib_func("_ZN6Player12delockTargetEv"), {p});
+        LOG("aim: auto-aim released");
+    }
+    if (!g_auto_aim) g_reacquire = 0;
+    g_auto_aim_was = g_auto_aim;
+}
 
 uint32_t take_camera_to_watch() {
     const uint32_t a = g_cam_watch;
@@ -338,6 +439,8 @@ bool touch_controls_hidden() { return g_hidden; }
 int steering_mode(rt::Runtime& rt) { return g_hud ? int32_t(rt.mem().r32(g_hud + 0x1c)) : -1; }
 
 std::vector<Control> controls(rt::Runtime& rt, int screen_w, int screen_h) {
+    g_screen_w = screen_w;
+    g_screen_h = screen_h;
     std::vector<Control> out;
     if (!g_hud) return out;
     auto& m = rt.mem();

@@ -954,6 +954,36 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   Now the touch is placed in the game's units (radius × 1.1 × the swapped scale per axis);
   `mods::Control::stick_radius` reads +0x5C. Verified forward, back, diagonal, sideways.
 
+### 5A.4 / 5A.7 Targeting, weapons (2026-11-22; decomp_aim.c, decomp_aim2.c)
+- **Tap-to-target**: `HudScreen::processTouchRelease` treats an empty-screen touch as a tap when
+  it lasted less than a threshold and moved ≤ 9 px (+0x6C/+0x70 accumulate the drag), then
+  `tappedTarget(point)` → `Player::lockTarget(t, true)` (or `_SetTarget(0)` when nothing is hit).
+  Our camera drag starts at a fixed anchor (62%, 40% of the screen) and is lifted as soon as the
+  mouse/stick stops, so small camera moves became taps at the anchor: the random locks.
+- **Automatic lock**: `Player::updateLockTarget`, unless a tapped (manual) target is set, locks
+  `Character::getAttackableTarget()` every update (`lockTarget(t, false)`, effective once the
+  weapon is out, +0x688). getAttackableTarget = living characters not friendly to the player's
+  faction that pass a "can attack" virtual (+400), scored by distance within weapon range and by
+  facing. `Player::_GetTarget` = Player+0x650; Player has its Character at +4;
+  `Player::s_player` is the global Player*.
+- **Shots**: `Weapon::shoot(Character*, bool)` takes the gun's position/front (vfuncs +0x5C/+0x68)
+  and calls `Weapon::shoot(Character*, from, dir, bool)` (vectors by value), which per bullet uses
+  the camera's look direction if Character vfunc +0x174 says so (apparently sniper mode), else
+  the locked target, else `dir`, then adds spread. Rocket/grenade types (0xC/0xD) for the player
+  already aim at the screen centre. `Weapon::getTargetPointedByWeapon` raycasts from the camera.
+- **Weapon switch**: `OnFootControlHandler::handleSwitchWeaponButton` = `Player::switchWeapon(
+  s_player, dir, true)` (blocked while Player+0x7E8). The selector widget is not a VirtualButton.
+- **Done**: hooks on `HudScreen::processTouchRelease` (pre: +0x6C = 100, always a drag) and
+  `Character::getAttackableTarget` (post: 0 for the player unless our auto-aim asks), both added
+  to codegen's HOOKABLE. Auto-aim (LT / middle mouse) locks getAttackableTarget's pick or else
+  `HudScreen::tappedTarget(screen centre)` with `lockTarget(t, true)`, retries every 0.25 s while
+  nothing is locked, `delockTarget` on release (verified: locked a pedestrian, player turned and
+  fired at them). Weapon next/prev call `Player::switchWeapon` (verified fists → bat → pistol).
+  `[controls] tap_to_target = true` restores the phone behaviour. Controller: RB fire, LT auto-aim,
+  RT aim (manual aim: next step), B cover, d-pad left/right weapons, up/down radio.
+- Seen once, not reproduced: during LT + RB the weapon went pistol → bat → fists (no switch call
+  of ours in that run was logged; logging was added afterwards). Watch for it.
+
 ### 5C draw distance and LOD (findings 2026-11-21, nothing changed yet)
 - The `draw_distance` setting is applied once, in the `loadPerformanceProfile` hook, so it needs a
   restart (the F1 menu says so), and `apply_quality` is skipped entirely when `quality = phone`.

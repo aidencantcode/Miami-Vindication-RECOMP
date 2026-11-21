@@ -21,6 +21,7 @@
 #include <vector>
 
 namespace rt { class Runtime; }
+namespace cpu { class Cpu; }
 namespace settings { struct Settings; }
 
 namespace mods {
@@ -55,6 +56,14 @@ void set_virtual_steering(bool on, float steer);
 
 // Camera mode (classic | freeform | first_person), live.
 void set_camera_mode(const std::string& mode);
+
+// Aiming (PC scheme unless [controls] tap_to_target): no tap-to-target and no automatic lock;
+// auto-aim held (LT / middle mouse) locks the game's own pick, release unlocks.
+void set_aim_input(bool auto_aim);
+// Queue weapon switches (+1 next, -1 previous); done in frame() through Player::switchWeapon.
+void switch_weapon(int step);
+// Once per frame before the game runs (main CPU idle): weapon switches, auto-aim.
+void frame(cpu::Cpu& c, double dt);
 
 // The game's own time step since the last call: average ms per Application::_Update and count.
 bool take_step_stats(double* avg_step_ms, int* steps);

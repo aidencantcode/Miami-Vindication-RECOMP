@@ -38,6 +38,7 @@ struct Settings {
     bool mouse_look = true;                 // lock the cursor in gameplay; the mouse turns the camera, left click attacks
     std::string camera_mode = "classic";    // classic (phone: swings behind you) | freeform | first_person
     float stick_deadzone = 0.2f;
+    bool tap_to_target = false;             // the phone's tap-on-a-person lock and automatic lock while shooting (touchscreens)
 
     // [audio]
     float master_volume = 1.0f;             // 0..1

@@ -264,6 +264,11 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
                                   "in menus, the map, cutscenes, this menu and when you switch windows.");
             ch |= ImGui::Checkbox("Invert camera Y", &s.invert_camera_y);
             ch |= ImGui::SliderFloat("Stick deadzone", &s.stick_deadzone, 0.0f, 0.6f, "%.2f");
+            ch |= ImGui::Checkbox("Phone targeting (tap a person to lock on, lock on while shooting)", &s.tap_to_target);
+            restart_note();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Off: nothing locks unless you hold auto-aim (LT / middle click).\n"
+                                  "On: the touchscreen behaviour of the phone version.");
             ImGui::Separator();
             if (ImGui::BeginTable("binds", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
                 ImGui::TableSetupColumn("Action");
@@ -273,15 +278,16 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
                 static const char* rows[][3] = {
                     {"Move / steer", "Left stick", "WASD / arrows"},
                     {"Camera", "Right stick", "Mouse (mouse look), else right-drag"},
-                    {"Attack", "RT (B in a car)", "Left click (mouse look), Space, Left Ctrl"},
-                    {"Accelerate / brake", "RT / LT", "W / S"},
+                    {"Fire", "RB", "Left click (on foot), right click (in a car), Space, Left Ctrl"},
+                    {"Auto-aim: lock the nearest (hold)", "LT (on foot)", "Middle click (hold)"},
+                    {"Accelerate / brake", "RT / LT (in a car)", "W / S"},
                     {"Sprint", "A", "Shift"},
-                    {"Cover", "LT / B", "Q"},
+                    {"Cover", "B", "Q"},
                     {"Enter / exit car", "Y (hold to enter when near)", "F"},
                     {"Interact (shop, mission, save)", "X", "E"},
-                    {"Weapon prev / next", "LB / RB", "1 / 2, mouse wheel"},
+                    {"Weapon prev / next", "D-pad left / right", "1 / 2, mouse wheel"},
                     {"Map", "Back", "M"},
-                    {"Radio on/off, next station", "D-pad up / right", "R / T"},
+                    {"Radio on/off, next station", "D-pad up / down", "R / T"},
                     {"Pause / back", "Start (B in menus)", "Esc"},
                     {"Menus", "Stick moves a cursor, A clicks", "Mouse"},
                     {"Fast forward on/off", "R3 (click right stick)", "F2"},

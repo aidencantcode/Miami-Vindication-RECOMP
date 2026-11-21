@@ -89,6 +89,8 @@ HOOKABLE = {
     "_ZN5Menus8MainMenu6NotifyEPK10MenuWidgeti",
     "_ZN21DrivingControlHandler18handleAccelerationEPK14EvAcceleration",
     "_ZN7DayTime6updateEd",  # time-of-day override (GANGSTAR_TIME)
+    "_ZN9HudScreen19processTouchReleaseEv",  # aiming: no tap-to-target (5A.4)
+    "_ZN9Character19getAttackableTargetEv",  # aiming: no automatic lock (5A.4)
 }
 
 

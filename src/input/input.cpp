@@ -41,12 +41,14 @@ const std::initializer_list<int> kActionTypes[A_COUNT] = {
     /*A_ATTACK*/ {BT_ATTACK}, /*A_ENTER_CAR*/ {BT_ENTER_CAR},
     /*A_INTERACT*/ {BT_SHOP, BT_SIDE_MISSION, BT_MINISAVE}, /*A_ACCELERATE*/ {BT_ACCEL},
     /*A_BRAKE*/ {BT_BRAKE}, /*A_COVER*/ {BT_COVER}, /*A_SPRINT*/ {BT_SPRINT}, /*A_MAP*/ {BT_MAP},
-    /*A_RADIO*/ {BT_RADIO_TOGGLE}, /*A_RADIO_NEXT*/ {BT_RADIO}, /*A_WEAPON_NEXT*/ {BT_WEAPON_NEXT},
-    /*A_WEAPON_PREV*/ {BT_WEAPON_PREV}, /*A_CONFIRM*/ {}, /*A_BACK*/ {}, /*A_MENU*/ {}};
+    /*A_RADIO*/ {BT_RADIO_TOGGLE}, /*A_RADIO_NEXT*/ {BT_RADIO},
+    // Weapons: the selector widget is not a HUD button; switched through mods::switch_weapon.
+    /*A_WEAPON_NEXT*/ {}, /*A_WEAPON_PREV*/ {}, /*A_AIM*/ {}, /*A_AUTO_AIM*/ {},
+    /*A_CONFIRM*/ {}, /*A_BACK*/ {}, /*A_MENU*/ {}};
 
 const char* kActionNames[A_COUNT] = {"attack", "enter_car", "interact", "accelerate", "brake", "cover", "sprint",
-                                     "map", "radio", "radio_next", "weapon_next", "weapon_prev", "confirm",
-                                     "back", "menu"};
+                                     "map", "radio", "radio_next", "weapon_next", "weapon_prev", "aim", "auto_aim",
+                                     "confirm", "back", "menu"};
 
 float axis(SDL_GameController* p, SDL_GameControllerAxis a) {
     return p ? std::clamp(SDL_GameControllerGetAxis(p, a) / 32767.0f, -1.0f, 1.0f) : 0.0f;
@@ -111,6 +113,8 @@ void Input::release_all() {
     cursor_pressed_ = false;
     rmb_down_ = false;
     rmb_dx_ = rmb_dy_ = 0;
+    rmb_held_ = mmb_held_ = false;
+    mods::set_aim_input(false);
     key_edge(AK_BACK, false, &prev_back_);
     key_edge(AK_MENU, false, &prev_menu_);
     if (tilting_) {
@@ -128,7 +132,7 @@ void Input::update_mouse_lock(bool allowed) {
     // cursor and reports raw motion).
     const bool want = mouse_look_ && allowed && gameplay_ && last_device_ != Device::Pad;
     if (want == mouse_locked_) return;
-    if (!want && mouse_locked_ && lmb_attack_) lmb_attack_ = false;
+    if (!want && mouse_locked_) lmb_attack_ = rmb_held_ = mmb_held_ = false;
     mouse_locked_ = want;
     SDL_SetRelativeMouseMode(want ? SDL_TRUE : SDL_FALSE);
     if (want) {
@@ -200,10 +204,14 @@ void Input::handle(const SDL_Event& ev) {
                 rmb_dy_ += float(ev.motion.yrel) * game_h_ / std::max(vp_h_, 1);
                 return;
             case SDL_MOUSEBUTTONDOWN:
-            case SDL_MOUSEBUTTONUP:
-                if (ev.button.button == SDL_BUTTON_LEFT) lmb_attack_ = ev.type == SDL_MOUSEBUTTONDOWN;
+            case SDL_MOUSEBUTTONUP: {
+                const bool down = ev.type == SDL_MOUSEBUTTONDOWN;
+                if (ev.button.button == SDL_BUTTON_LEFT) lmb_attack_ = down;
+                if (ev.button.button == SDL_BUTTON_RIGHT) rmb_held_ = down;
+                if (ev.button.button == SDL_BUTTON_MIDDLE) mmb_held_ = down;
                 last_device_ = Device::Keyboard;
                 return;
+            }
             default: break;
         }
     }
@@ -298,28 +306,35 @@ GameInput Input::gather(double dt) {
     const bool rt = std::max(axis(pad_, SDL_CONTROLLER_AXIS_TRIGGERRIGHT), srt_) > 0.3f;
     const bool lt = std::max(axis(pad_, SDL_CONTROLLER_AXIS_TRIGGERLEFT), slt_) > 0.3f;
 
-    // controller
+    // controller (owner's scheme, PLAN 5A.4): RB fires everywhere; on foot RT = aim, LT = auto-aim,
+    // B = cover; in cars RT/LT are the pedals. Weapons on the d-pad, radio up (on/off) / down (next).
+    gi.act[A_ATTACK] = pb(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER);
     if (driving_) {
         gi.act[A_ACCELERATE] = rt;
         gi.act[A_BRAKE] = lt;
-        gi.act[A_ATTACK] = pb(SDL_CONTROLLER_BUTTON_B);  // drive-by
     } else {
-        gi.act[A_ATTACK] = rt;
-        gi.act[A_COVER] = lt || pb(SDL_CONTROLLER_BUTTON_B);
+        gi.act[A_AIM] = rt;
+        gi.act[A_AUTO_AIM] = lt;
+        gi.act[A_COVER] = pb(SDL_CONTROLLER_BUTTON_B);
     }
-    gi.act[A_WEAPON_NEXT] = pb(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER);
-    gi.act[A_WEAPON_PREV] = pb(SDL_CONTROLLER_BUTTON_LEFTSHOULDER);
+    gi.act[A_WEAPON_NEXT] = pb(SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+    gi.act[A_WEAPON_PREV] = pb(SDL_CONTROLLER_BUTTON_DPAD_LEFT);
     gi.act[A_SPRINT] = pb(SDL_CONTROLLER_BUTTON_A);
     gi.act[A_INTERACT] = pb(SDL_CONTROLLER_BUTTON_X);
     gi.act[A_ENTER_CAR] = pb(SDL_CONTROLLER_BUTTON_Y);
     gi.act[A_MAP] = pb(SDL_CONTROLLER_BUTTON_BACK);
     gi.act[A_RADIO] = pb(SDL_CONTROLLER_BUTTON_DPAD_UP);
-    gi.act[A_RADIO_NEXT] = pb(SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+    gi.act[A_RADIO_NEXT] = pb(SDL_CONTROLLER_BUTTON_DPAD_DOWN);
     gi.act[A_CONFIRM] = pb(SDL_CONTROLLER_BUTTON_A);
     gi.act[A_BACK] = pb(SDL_CONTROLLER_BUTTON_START) || (!gameplay_ && pb(SDL_CONTROLLER_BUTTON_B));
 
-    // keyboard
-    gi.act[A_ATTACK] |= k(SDL_SCANCODE_SPACE) || k(SDL_SCANCODE_LCTRL) || lmb_attack_;
+    // keyboard + mouse: left button fires on foot, right button aims on foot and fires in cars,
+    // middle button auto-aims
+    gi.act[A_ATTACK] |= k(SDL_SCANCODE_SPACE) || k(SDL_SCANCODE_LCTRL) || lmb_attack_ || (driving_ && rmb_held_);
+    if (!driving_) {
+        gi.act[A_AIM] |= rmb_held_;
+        gi.act[A_AUTO_AIM] |= mmb_held_;
+    }
     gi.act[A_SPRINT] |= k(SDL_SCANCODE_LSHIFT) || k(SDL_SCANCODE_RSHIFT);
     gi.act[A_ENTER_CAR] |= k(SDL_SCANCODE_F);
     gi.act[A_INTERACT] |= k(SDL_SCANCODE_E);
@@ -449,6 +464,13 @@ void Input::drive_gameplay(const std::vector<mods::Control>& controls, const Gam
         }
     }
 
+    // weapons (one switch per press) and auto-aim
+    if (gi.act[A_WEAPON_NEXT] && !weapon_next_) mods::switch_weapon(1);
+    if (gi.act[A_WEAPON_PREV] && !weapon_prev_) mods::switch_weapon(-1);
+    weapon_next_ = gi.act[A_WEAPON_NEXT];
+    weapon_prev_ = gi.act[A_WEAPON_PREV];
+    mods::set_aim_input(!driving_ && gi.act[A_AUTO_AIM]);
+
     // camera: a continuous drag on empty screen space that re-grabs before it reaches a control
     const float speed = 700.0f * mouse_sens_;  // game pixels per second at full deflection
     const float dx = float(gi.cx * speed * dt) + rmb_dx_ * mouse_sens_;
@@ -473,6 +495,7 @@ void Input::drive_gameplay(const std::vector<mods::Control>& controls, const Gam
 }
 
 void Input::drive_menus(const GameInput& gi, double dt) {
+    mods::set_aim_input(false);
     if (gi.mx != 0 || gi.my != 0) {
         cursor_on_ = true;
         cursor_x_ = std::clamp(cursor_x_ + float(gi.mx * 650.0 * dt), 0.0f, float(game_w_ - 1));

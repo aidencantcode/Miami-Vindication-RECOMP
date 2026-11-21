@@ -36,7 +36,8 @@ struct GameCalls {
 // Abstract actions (ButtonType values from OnFoot/DrivingControlHandler::handleVirtualButton).
 enum Action {
     A_ATTACK, A_ENTER_CAR, A_INTERACT, A_ACCELERATE, A_BRAKE, A_COVER, A_SPRINT,
-    A_MAP, A_RADIO, A_RADIO_NEXT, A_WEAPON_NEXT, A_WEAPON_PREV, A_CONFIRM, A_BACK, A_MENU, A_COUNT
+    A_MAP, A_RADIO, A_RADIO_NEXT, A_WEAPON_NEXT, A_WEAPON_PREV, A_AIM, A_AUTO_AIM,
+    A_CONFIRM, A_BACK, A_MENU, A_COUNT
 };
 
 struct GameInput {
@@ -120,6 +121,8 @@ private:
     bool prev_back_ = false, prev_menu_ = false;
     bool suppress_ = false;
     bool mouse_look_ = true, mouse_locked_ = false, lmb_attack_ = false;
+    bool rmb_held_ = false, mmb_held_ = false;  // mouse-look: right = aim (on foot) / fire (car), middle = auto-aim
+    bool weapon_prev_ = false, weapon_next_ = false;  // last frame's weapon actions (press edges)
 
     struct Step { int frame; double time; std::string cmd; std::string a; int x, y; bool done; };
     std::vector<Step> script_;

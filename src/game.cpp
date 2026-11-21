@@ -440,6 +440,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
             if (!menu_open) {
                 // Keyboard / controller -> virtual touches on the current HUD.
                 in.update(frame_dt);
+                mods::frame(cpu, frame_dt);  // weapon switches, auto-aim (main CPU idle here)
                 if (cfg.touch_controls == "auto")  // hide the touch HUD while a pad or the keyboard drives
                     mods::set_touch_controls_hidden(in.last_device() != input::Device::Touch);
                 else
