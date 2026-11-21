@@ -53,6 +53,18 @@ void replace_compressed_levels(unsigned tex, unsigned format, const std::vector<
 void set_world_texture(unsigned tex, bool world);
 void set_world_tint(float r, float g, float b);
 
+// Atmospheric fog. The game's own fog is linear from the texture streaming radius to past the far
+// city, so the detailed city is never fogged. Atmospheric mode keeps the game's time-of-day fog
+// colour but uses exponential-squared haze by distance from the eye, 97% at `far_end` (the far city's
+// end, so the horizon cut-off disappears), scaled by `strength` (0 = no fog).
+struct FogConfig {
+    bool atmospheric = false;     // false: the game's fog exactly as it asked
+    float far_end = 60000;        // world units
+    float strength = 1;
+    bool fog_everything = true;   // also fog opaque 3D draws the game leaves unfogged (people, cars)
+};
+void set_fog(const FogConfig& f);
+
 // Texture filtering override (applied live to every texture whose filters the game set).
 enum class TextureFilter { Game, Nearest, Bilinear, Trilinear };
 void set_texture_filter(TextureFilter f);

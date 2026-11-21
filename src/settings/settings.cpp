@@ -61,6 +61,8 @@ const std::vector<Field>& fields() {
         F("graphics", "anisotropy", &Settings::anisotropy),
         F("graphics", "texture_filter", &Settings::texture_filter),
         F("graphics", "night_textures", &Settings::night_textures),
+        F("graphics", "fog", &Settings::fog),
+        F("graphics", "fog_strength", &Settings::fog_strength),
         F("controls", "touch_controls", &Settings::touch_controls),
         F("controls", "mouse_sensitivity", &Settings::mouse_sensitivity),
         F("controls", "invert_camera_y", &Settings::invert_camera_y),

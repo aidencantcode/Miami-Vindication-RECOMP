@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -163,6 +164,88 @@ std::unordered_map<uint32_t, uint32_t> g_buffer_size;                    // buff
 std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> g_shadow;    // buffer -> (guest ptr, capacity)
 uint64_t g_draws = 0;
 
+// ---- shadow state: what the game set, readable without a glGet round trip ------------------------
+struct Mat4 { float m[16]; };
+const Mat4 kIdentity = {{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
+Mat4 mul(const Mat4& a, const Mat4& b) {  // column-major, a * b
+    Mat4 r;
+    for (int c = 0; c < 4; ++c)
+        for (int row = 0; row < 4; ++row) {
+            float s = 0;
+            for (int k = 0; k < 4; ++k) s += a.m[k * 4 + row] * b.m[c * 4 + k];
+            r.m[c * 4 + row] = s;
+        }
+    return r;
+}
+GLenum g_matrix_mode = GL_MODELVIEW;
+std::vector<Mat4> g_proj{kIdentity}, g_mv{kIdentity};  // matrix stacks (top = current)
+std::vector<Mat4>* matrix_stack() {
+    return g_matrix_mode == GL_PROJECTION ? &g_proj : g_matrix_mode == GL_MODELVIEW ? &g_mv : nullptr;
+}
+bool g_fog_on = false, g_depth_test = false, g_lighting = false, g_blend = false, g_depth_write = true;
+float g_depth_range_far = 1;  // glDepthRange far end: the near city is drawn in [0, 0.2], sky and far city in [0.2, 1]
+bool g_fog_forced = false;  // atmospheric fog enabled GL_FOG for this draw (the game had it off)
+void track_cap(GLenum cap, bool on) {
+    switch (cap) {
+        case GL_FOG: g_fog_on = on; g_fog_forced = false; break;  // the game's call sets the real state
+        case GL_DEPTH_TEST: g_depth_test = on; break;
+        case GL_LIGHTING: g_lighting = on; break;
+        case GL_BLEND: g_blend = on; break;
+        default: break;
+    }
+}
+// The engine builds left-handed (Irrlicht-style) projections: m[11] = +1. Near/far from the
+// GL-style terms m[10] = (f+n)/(f-n), m[14] = -2fn/(f-n); the sky uses an infinite far plane.
+bool is_perspective(const Mat4& p) { return std::abs(std::abs(p.m[11]) - 1) < 1e-3f && std::abs(p.m[15]) < 1e-6f; }
+float proj_near(const Mat4& p) { return -p.m[14] / (p.m[10] + 1); }
+float proj_far(const Mat4& p) { return std::abs(p.m[10] - 1) < 1e-6f ? INFINITY : -p.m[14] / (p.m[10] - 1); }
+// A finite 3D projection (the city, people, cars), not the sky's infinite one and not the HUD's ortho.
+bool is_world_projection(const Mat4& p) { return is_perspective(p) && std::abs(p.m[10]) > 1.0005f; }
+
+// GANGSTAR_GL_FRAME_TRACE=<frame>: log that frame's structure (clears, targets, projections, and
+// runs of draws with the same state), to see where the 3D scene ends and the HUD starts.
+int g_frame = 0;
+bool frame_tracing() {
+    static const int f = [] { const char* e = std::getenv("GANGSTAR_GL_FRAME_TRACE"); return e ? std::atoi(e) : -1; }();
+    return g_frame == f;
+}
+std::string g_trace_sig;
+int g_trace_run = 0;
+void trace_flush() {
+    if (g_trace_run) LOG("frame-trace   %d x draw %s", g_trace_run, g_trace_sig.c_str());
+    g_trace_run = 0;
+    g_trace_sig.clear();
+}
+void trace_event(const char* fmt, ...) {
+    if (!frame_tracing()) return;
+    trace_flush();
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    LOG("frame-trace %s", buf);
+}
+void trace_draw(GLuint tex0, int count) {
+    if (!frame_tracing()) return;
+    const Mat4& p = g_proj.back();
+    char buf[200];
+    if (is_perspective(p)) {
+        std::snprintf(buf, sizeof buf, "persp n=%.0f f=%.0f m10=%.6f", proj_near(p), proj_far(p), p.m[10]);
+    } else {
+        std::snprintf(buf, sizeof buf, "ortho");
+    }
+    std::string sig = std::string(buf) + (g_fog_on ? " fog" : "") + (g_depth_test ? " ztest" : "") +
+                      (g_depth_write ? " zwrite" : "") + (g_lighting ? " lit" : "") + (g_blend ? " blend" : "");
+    (void)count;
+    (void)tex0;
+    if (sig != g_trace_sig) {
+        trace_flush();
+        g_trace_sig = sig;
+    }
+    ++g_trace_run;
+}
+
 #define H(fn) void fn(Cpu& c, Args& a)
 #define M (c.rt().mem())
 
@@ -173,8 +256,8 @@ const void* array_ptr(Cpu& c, uint32_t p, bool bound) {
 }
 
 // ---- state -----------------------------------------------------------------------------------------
-H(enable) { glEnable(a.u32()); }
-H(disable) { glDisable(a.u32()); }
+H(enable) { GLenum cap = a.u32(); track_cap(cap, true); glEnable(cap); }
+H(disable) { GLenum cap = a.u32(); track_cap(cap, false); glDisable(cap); }
 H(enable_cs) { glEnableClientState(a.u32()); }
 H(disable_cs) { glDisableClientState(a.u32()); }
 H(alpha_func) { GLenum f = a.u32(); float r = a.f32(); glAlphaFunc(f, r); }
@@ -184,8 +267,13 @@ H(color_mask) { GLboolean r = GLboolean(a.u32()), g = GLboolean(a.u32()), b = GL
 H(cull_face) { glCullFace(a.u32()); }
 H(front_face) { glFrontFace(a.u32()); }
 H(depth_func) { glDepthFunc(a.u32()); }
-H(depth_mask) { glDepthMask(GLboolean(a.u32())); }
-H(depth_rangef) { float n = a.f32(), f = a.f32(); glDepthRange(n, f); }
+H(depth_mask) { GLboolean m = GLboolean(a.u32()); g_depth_write = m != 0; glDepthMask(m); }
+H(depth_rangef) {
+    float n = a.f32(), f = a.f32();
+    trace_event("depth range %.3f %.3f", n, f);
+    g_depth_range_far = f;
+    glDepthRange(n, f);
+}
 H(polygon_offset) { float f = a.f32(), u = a.f32(); glPolygonOffset(f, u); }
 H(line_width) { glLineWidth(float(a.f32() * ky())); }
 H(point_size) { glPointSize(float(a.f32() * ky())); }
@@ -204,7 +292,12 @@ H(stencil_func) { GLenum f = a.u32(); GLint r = a.s32(); GLuint m = a.u32(); glS
 H(stencil_mask) { glStencilMask(a.u32()); }
 H(stencil_op) { GLenum f = a.u32(), zf = a.u32(), zp = a.u32(); glStencilOp(f, zf, zp); }
 H(pixel_storei) { GLenum p = a.u32(); GLint v = a.s32(); glPixelStorei(p, v); }
-H(clear) { glClear(a.u32()); }
+H(clear) {
+    GLbitfield m = a.u32();
+    trace_event("clear%s%s%s (fb %u)", m & GL_COLOR_BUFFER_BIT ? " color" : "", m & GL_DEPTH_BUFFER_BIT ? " depth" : "",
+                m & GL_STENCIL_BUFFER_BIT ? " stencil" : "", g_game_fb);
+    glClear(m);
+}
 H(clear_color) { float r = a.f32(), g = a.f32(), b = a.f32(), al = a.f32(); glClearColor(r, g, b, al); }
 H(clear_depthf) { glClearDepth(a.f32()); }
 H(clear_stencil) { glClearStencil(a.s32()); }
@@ -257,12 +350,33 @@ H(get_floatv) {
 }
 
 // ---- fixed-function pipeline ---------------------------------------------------------------------
-H(matrix_mode) { glMatrixMode(a.u32()); }
-H(load_identity) { glLoadIdentity(); }
-H(load_matrixf) { glLoadMatrixf(static_cast<const GLfloat*>(host(c, a.u32()))); }
-H(mult_matrixf) { glMultMatrixf(static_cast<const GLfloat*>(host(c, a.u32()))); }
-H(push_matrix) { glPushMatrix(); }
-H(pop_matrix) { glPopMatrix(); }
+H(matrix_mode) { g_matrix_mode = a.u32(); glMatrixMode(g_matrix_mode); }
+H(load_identity) {
+    if (auto* s = matrix_stack()) s->back() = kIdentity;
+    glLoadIdentity();
+}
+H(load_matrixf) {
+    const GLfloat* m = static_cast<const GLfloat*>(host(c, a.u32()));
+    if (auto* s = matrix_stack()) std::memcpy(s->back().m, m, sizeof(Mat4));
+    glLoadMatrixf(m);
+}
+H(mult_matrixf) {
+    const GLfloat* m = static_cast<const GLfloat*>(host(c, a.u32()));
+    if (auto* s = matrix_stack()) {
+        Mat4 b;
+        std::memcpy(b.m, m, sizeof b);
+        s->back() = mul(s->back(), b);
+    }
+    glMultMatrixf(m);
+}
+H(push_matrix) {
+    if (auto* s = matrix_stack()) s->push_back(s->back());
+    glPushMatrix();
+}
+H(pop_matrix) {
+    if (auto* s = matrix_stack(); s && s->size() > 1) s->pop_back();
+    glPopMatrix();
+}
 H(color4f) { float r = a.f32(), g = a.f32(), b = a.f32(), al = a.f32(); glColor4f(r, g, b, al); }
 H(color4ub) { GLubyte r = GLubyte(a.u32()), g = GLubyte(a.u32()), b = GLubyte(a.u32()), al = GLubyte(a.u32()); glColor4ub(r, g, b, al); }
 H(normal3f) { float x = a.f32(), y = a.f32(), z = a.f32(); glNormal3f(x, y, z); }
@@ -286,8 +400,63 @@ int param_count(GLenum p) {
         default: return 1;
     }
 }
-H(fogf) { GLenum p = a.u32(); float v = a.f32(); light_trace("glFogf", p, 0, &v, 1); glFogf(p, v); }
-H(fogfv) { GLenum p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32())); light_trace("glFogfv", p, 0, v, param_count(p)); glFogfv(p, v); }
+// ---- atmospheric fog (see gles1.h) ----------------------------------------------------------------
+// The game's fog is linear from the texture streaming radius to past the far city's end, so the
+// detailed city (which ends before the fog starts) is never fogged. Atmospheric mode keeps the
+// game's time-of-day fog colour and replaces the distances with exponential-squared haze by eye
+// distance (radial where the driver supports NV_fog_distance), almost opaque at the far city's end.
+struct GameFog { GLint mode = GL_EXP; float start = 0, end = 1, density = 1; };
+GameFog g_game_fog;           // the distances the game asked for (restored when atmospheric is off)
+FogConfig g_fog_cfg;
+bool g_fog_radial = false;    // GL_NV_fog_distance available
+constexpr GLenum kFogDistanceMode = 0x855A, kEyeRadial = 0x855B, kEyePlaneAbsolute = 0x855C;
+
+void apply_fog() {
+    if (g_fog_cfg.atmospheric) {
+        // exp(-(d*z)^2) = 3% at `far`: d*far = sqrt(-ln 0.03) = 1.873
+        const float d = g_fog_cfg.strength <= 0 ? 0.0f : 1.873f * g_fog_cfg.strength / std::max(1.0f, g_fog_cfg.far_end);
+        glFogi(GL_FOG_MODE, GL_EXP2);
+        glFogf(GL_FOG_DENSITY, d);
+    } else {
+        glFogi(GL_FOG_MODE, g_game_fog.mode);
+        glFogf(GL_FOG_START, g_game_fog.start);
+        glFogf(GL_FOG_END, g_game_fog.end);
+        glFogf(GL_FOG_DENSITY, g_game_fog.density);
+    }
+    if (g_fog_radial) glFogi(kFogDistanceMode, g_fog_cfg.atmospheric ? kEyeRadial : kEyePlaneAbsolute);
+}
+// Records a distance parameter; true if atmospheric fog owns it (do not pass it to GL).
+bool game_fog_param(GLenum p, float v) {
+    switch (p) {
+        case GL_FOG_MODE: g_game_fog.mode = GLint(v); break;
+        case GL_FOG_START: g_game_fog.start = v; break;
+        case GL_FOG_END: g_game_fog.end = v; break;
+        case GL_FOG_DENSITY: g_game_fog.density = v; break;
+        default: return false;
+    }
+    return g_fog_cfg.atmospheric;
+}
+// People and cars are drawn without fog (they were always close on the phone); with atmospheric
+// fog every opaque 3D draw is fogged, so a far car sits in the haze like the street around it.
+void fog_before_draw() {
+    const bool force = g_fog_cfg.atmospheric && g_fog_cfg.fog_everything && !g_fog_on && !g_blend && g_depth_test &&
+                       g_depth_range_far < 0.999f && is_world_projection(g_proj.back());
+    if (force == g_fog_forced) return;
+    if (force) glEnable(GL_FOG);
+    else glDisable(GL_FOG);
+    g_fog_forced = force;
+}
+
+H(fogf) {
+    GLenum p = a.u32(); float v = a.f32();
+    light_trace("glFogf", p, 0, &v, 1);
+    if (!game_fog_param(p, v)) glFogf(p, v);
+}
+H(fogfv) {
+    GLenum p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32()));
+    light_trace("glFogfv", p, 0, v, param_count(p));
+    if (param_count(p) != 1 || !game_fog_param(p, v[0])) glFogfv(p, v);
+}
 H(lightf) { GLenum l = a.u32(), p = a.u32(); float v = a.f32(); light_trace("glLightf", l, p, &v, 1); glLightf(l, p, v); }
 H(lightfv) { GLenum l = a.u32(), p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32())); light_trace("glLightfv", l, p, v, param_count(p)); glLightfv(l, p, v); }
 H(light_modelf) { GLenum p = a.u32(); float v = a.f32(); light_trace("glLightModelf", p, 0, &v, 1); glLightModelf(p, v); }
@@ -304,10 +473,20 @@ H(texcoord_pointer) { GLint s = a.s32(); GLenum t = a.u32(); GLsizei st = a.s32(
 H(color_pointer) { GLint s = a.s32(); GLenum t = a.u32(); GLsizei st = a.s32(); glColorPointer(s, t, st, array_ptr(c, a.u32(), g_array_buffer)); }
 H(normal_pointer) { GLenum t = a.u32(); GLsizei st = a.s32(); glNormalPointer(t, st, array_ptr(c, a.u32(), g_array_buffer)); }
 H(client_active_texture) { p_glClientActiveTexture(a.u32()); }
-H(draw_arrays) { GLenum m = a.u32(); GLint f = a.s32(); GLsizei n = a.s32(); tint_before_draw(); glDrawArrays(m, f, n); ++g_draws; }
+GLuint bound_tex0();
+H(draw_arrays) {
+    GLenum m = a.u32(); GLint f = a.s32(); GLsizei n = a.s32();
+    trace_draw(bound_tex0(), n);
+    tint_before_draw();
+    fog_before_draw();
+    glDrawArrays(m, f, n);
+    ++g_draws;
+}
 H(draw_elements) {
     GLenum m = a.u32(); GLsizei n = a.s32(); GLenum t = a.u32();
+    trace_draw(bound_tex0(), n);
     tint_before_draw();
+    fog_before_draw();
     glDrawElements(m, n, t, array_ptr(c, a.u32(), g_element_buffer));
     ++g_draws;
 }
@@ -362,6 +541,7 @@ std::unordered_map<GLuint, TexFilters> g_tex_filters;  // textures whose filters
 TextureFilter g_filter_mode = TextureFilter::Game;
 GLuint g_bound_2d[8] = {};                              // GL_TEXTURE_2D binding per texture unit
 int g_unit = 0;
+GLuint bound_tex0() { return g_bound_2d[0]; }
 
 bool is_mip(GLint f) {
     return f == GL_NEAREST_MIPMAP_NEAREST || f == GL_LINEAR_MIPMAP_NEAREST || f == GL_NEAREST_MIPMAP_LINEAR ||
@@ -572,6 +752,7 @@ H(bind_framebuffer) {
     GLenum t = a.u32();
     const bool was_screen = on_screen();
     g_game_fb = a.u32();
+    trace_event("bind framebuffer %u", g_game_fb);
     p_glBindFramebuffer(t, g_game_fb ? g_game_fb : g_vfb);  // "0" is our virtual screen
     if (on_screen() != was_screen) {  // screen <-> the game's own target: re-map viewport/scissor
         apply_viewport();
@@ -597,7 +778,18 @@ bool load_gl() {
     GL_EXT_FUNCS(LOAD)
 #undef LOAD
     if (ok) tint_init();
+    const char* ext = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
+    g_fog_radial = ext && std::strstr(ext, "GL_NV_fog_distance");
+    LOG("GL: fog distance %s", g_fog_radial ? "radial (NV_fog_distance)" : "by depth plane");
     return ok;
+}
+
+void set_fog(const FogConfig& f) {
+    if (f.atmospheric == g_fog_cfg.atmospheric && f.far_end == g_fog_cfg.far_end && f.strength == g_fog_cfg.strength &&
+        f.fog_everything == g_fog_cfg.fog_everything)
+        return;
+    g_fog_cfg = f;
+    apply_fog();
 }
 
 void register_handlers(rt::Runtime& rt) {
@@ -725,6 +917,8 @@ void set_texture_filter(TextureFilter f) {
 const VfbConfig& vfb_config() { return g_cfg; }
 
 void vfb_present(int win_w, int win_h, Fit fit, bool linear, int* rx, int* ry, int* rw, int* rh) {
+    trace_event("present (end of frame %d)", g_frame);
+    ++g_frame;
     // Save the GL state we touch, so the game's (possibly one-time) settings survive.
     GLint vp[4], sb[4];
     GLfloat cc[4];

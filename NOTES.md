@@ -959,3 +959,33 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
 - **Open:** which of these causes the visible pop-in the owner sees, and how much guest memory a
   longer detailed range needs. How to find out: log the far/LOD values per frame, A/B screenshots
   from a fixed spot, Ghidra on the LODSceneNode distance check.
+
+### Frame structure (measured 2026-11-21, `GANGSTAR_GL_FRAME_TRACE=<frame>`, draw_distance 0.5)
+- The engine's projections are left-handed (Irrlicht style): m[11] = +1, m[10] = (f+n)/(f-n),
+  m[14] = -2fn/(f-n), so n = -m14/(m10+1), f = -m14/(m10-1). The bridge keeps shadow matrix stacks.
+- One gameplay frame (~35 draws: the city is batched):
+  1. clear colour + depth;
+  2. **sky**, depth range [0.199, 1], n = 50, f = 153015, no fog (dome + one blended layer);
+  3. **near city**, depth range [0, 0.199], n = 50, f = 6000 (= gPhonePerf +0x0C, the streaming
+     radius): world batches with fog on; people/props drawn **without fog**;
+  4. **far (LOD) city**, depth range [0.199, 1], n = 6000, f = 30000 (= +0x10): fogged batches plus
+     one blended draw;
+  5. transparent near objects, [0, 0.199], near projection, some fogged;
+  6. HUD: orthographic, no depth test, ~2 batched draws.
+  So the detailed city ends exactly where the LOD city starts, at the streaming radius.
+- Game fog: `GL_LINEAR`, start 6000 (streaming radius), end 46000, colour from the time-of-day
+  table (night 0.129/0.129/0.212). The near city ends at 6000, so **it is never fogged**; the LOD
+  city gets at most ~60% at its end, so its cut-off against the sky stays visible.
+- Lighting at night (from `GANGSTAR_GL_LIGHT_TRACE`): light 0 direction (0.374, -0.834, 0.406),
+  ambient ≈ 0.21/0.20/0.37 (drifts to ~0.41 blue), diffuse 0.38/0.63/0.80; materials ambient and
+  diffuse 0.584, **emission 0.32 / 0.25 / 0.19** (a constant glow on whatever uses them). This is
+  why people look bright at night (5C.1).
+
+### 5C.4 Atmospheric fog (done 2026-11-21, step 1)
+- `[graphics] fog = atmospheric` (default) | `game`, `fog_strength` (default 1.5). The bridge keeps
+  the game's fog colour, replaces its distances with `GL_EXP2`, density 1.873 × strength / far end
+  (97% at the far city's end at strength 1), radial eye distance via `GL_NV_fog_distance` when
+  available. Opaque draws the game leaves unfogged in the near-city depth range (people, cars,
+  props) get fog too; the sky (depth range up to 1.0) and blended draws are left alone.
+  The far end comes from gPhonePerf +0x10 each frame, so the fog follows the draw distance.
+- Step 2 (with bloom, needs a post-process pass): height fog and a warm glow toward the sun.

@@ -222,6 +222,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
 
     cpu::Cpu& cpu = rt.main_cpu();
     const uint32_t daytime_obj = rt.lib_object("_ZN7DayTime9s_dayTimeE");  // DayTime::s_dayTime, state at +4
+    const uint32_t perf_obj = rt.lib_object("gPhonePerf");  // +0x10: far city end (GetLowResFarPlane)
     if (opt.recomp) {
 #ifdef GANGSTAR_HAVE_RECOMP
         if (!recomp::bind(rt, cpu, &err)) FATAL("recomp: %s", err.c_str());
@@ -446,6 +447,11 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 const auto t_game = Clock::now();
                 nighttex::update(cfg.night_textures, int(rt.mem().r32(daytime_obj + 4)),  // DayTime state, ms of day
                                 int(rt.mem().r32(daytime_obj + 8) / 60000));
+                gles1::FogConfig fog;
+                fog.atmospheric = cfg.fog == "atmospheric";
+                fog.strength = cfg.fog_strength;
+                if (const int32_t lod_end = int32_t(rt.mem().r32(perf_obj + 0x10)); lod_end > 0) fog.far_end = float(lod_end);
+                gles1::set_fog(fog);
                 cpu.call(rt.lib_func("Java_com_gameloft_android_GAND_GloftGMHP_ML_GameRenderer_nativeRender"), {env, c_gr});
                 const double ms = std::chrono::duration<double, std::milli>(Clock::now() - t_game).count();
                 game_ms += ms;

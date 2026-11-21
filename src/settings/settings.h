@@ -27,6 +27,8 @@ struct Settings {
     int anisotropy = 8;                     // 0/1 = off, 2..16
     std::string texture_filter = "game";    // game | nearest | bilinear | trilinear
     bool night_textures = true;             // restore the unused night city textures (game/night_textures)
+    std::string fog = "atmospheric";        // game (thin, only on the far city) | atmospheric (haze by distance, hides the horizon)
+    float fog_strength = 1.5f;              // atmospheric fog: 0 = none, 1 = 97% at the far city's end
 
     // [controls]
     std::string touch_controls = "auto";    // auto (hide while a pad/keyboard drives) | show | hide
