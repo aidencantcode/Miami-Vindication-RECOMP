@@ -734,8 +734,11 @@ void trace_geometry(Cpu& c, GLint first, GLsizei n, GLenum itype, uint32_t iptr,
     }
 }
 // Dynamic lights (post.h): each additive 3D draw on screen is glow sprites from the light-effects
-// atlas (lamps, neon, headlight / taillight / police flares); every quad becomes a light at its
-// centre (eye space, through its own modelview) with a radius from its size. Client arrays only.
+// atlas (lamps, neon, headlight / taillight / police flares, headlight beams). Every quad is recorded
+// with its centre (eye space, through its own modelview), size, atlas rectangle (after the texture
+// matrix) and whether it is a city billboard (drawn with the camera view) or a car's light (a model
+// matrix; the model origin is the light's mount point). Client arrays only.
+int g_glow_draws = 0;  // glow draws this frame
 GLuint bound_tex0();
 void glow_capture(Cpu& c, GLenum mode, GLint first, GLsizei n, GLenum itype, uint32_t iptr) {
     if (!on_screen() || !g_blend || g_blend_dst != GL_ONE || !is_world_projection(g_proj.back()) || g_dbg_vtx.buf ||
@@ -743,9 +746,15 @@ void glow_capture(Cpu& c, GLenum mode, GLint first, GLsizei n, GLenum itype, uin
         return;
     post::Scene& s = g_post_scene;
     const Mat4& mv = g_mv.back();
+    const Mat4& tm = g_texm[0].back();
+    const bool uv_ok = g_dbg_tc.ptr && !g_dbg_tc.buf;
+    const bool world = s.view_valid && std::fabs(mv.m[12] - s.view[12]) + std::fabs(mv.m[13] - s.view[13]) +
+                                               std::fabs(mv.m[14] - s.view[14]) < 1.0f;
+    const int draw = g_glow_draws++;
     const GLsizei group = mode == GL_TRIANGLES ? 6 : n;
-    for (GLsizei q = 0; q + group <= n && s.light_count < post::Scene::kMaxLights; q += group) {
+    for (GLsizei q = 0; q + group <= n && s.glow_count < post::Scene::kMaxGlows; q += group) {
         float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+        float uv[4] = {1e30f, 1e30f, -1e30f, -1e30f};
         for (GLsizei j = 0; j < group; ++j) {
             uint32_t i = uint32_t(first + q + j);
             if (iptr) i = itype == GL_UNSIGNED_SHORT ? M.r16(iptr + 2 * (q + j)) : itype == GL_UNSIGNED_BYTE ? M.r8(iptr + q + j) : M.r32(iptr + 4 * (q + j));
@@ -754,33 +763,31 @@ void glow_capture(Cpu& c, GLenum mode, GLint first, GLsizei n, GLenum itype, uin
                 lo[k] = std::min(lo[k], v);
                 hi[k] = std::max(hi[k], v);
             }
+            if (uv_ok) {  // GLES 1 does not normalise integer texture coordinates: the texture matrix scales them
+                const float u0 = dbg_component(c, g_dbg_tc, i, 0), v0 = dbg_component(c, g_dbg_tc, i, 1);
+                const float u = tm.m[0] * u0 + tm.m[4] * v0 + tm.m[12], v = tm.m[1] * u0 + tm.m[5] * v0 + tm.m[13];
+                uv[0] = std::min(uv[0], u), uv[1] = std::min(uv[1], v), uv[2] = std::max(uv[2], u), uv[3] = std::max(uv[3], v);
+            }
         }
         const float o[3] = {(lo[0] + hi[0]) * 0.5f, (lo[1] + hi[1]) * 0.5f, (lo[2] + hi[2]) * 0.5f};
-        const float size = std::max({hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]});
-        float* L = s.lights[s.light_count];
-        for (int k = 0; k < 3; ++k) L[k] = mv.m[k] * o[0] + mv.m[4 + k] * o[1] + mv.m[8 + k] * o[2] + mv.m[12 + k];
-        L[3] = std::clamp(size * 4.0f, 250.0f, 1400.0f);
-        if (frame_tracing() && q < 6 * 3) {
-            float uv[4] = {1e9f, 1e9f, -1e9f, -1e9f}, col[4] = {0, 0, 0, 0};
-            for (GLsizei j = 0; j < group; ++j) {
-                uint32_t i = uint32_t(first + q + j);
-                if (iptr) i = itype == GL_UNSIGNED_SHORT ? M.r16(iptr + 2 * (q + j)) : itype == GL_UNSIGNED_BYTE ? M.r8(iptr + q + j) : M.r32(iptr + 4 * (q + j));
-                if (g_dbg_tc.ptr && !g_dbg_tc.buf) {
-                    const float u = dbg_component(c, g_dbg_tc, i, 0), v = dbg_component(c, g_dbg_tc, i, 1);
-                    uv[0] = std::min(uv[0], u), uv[1] = std::min(uv[1], v), uv[2] = std::max(uv[2], u), uv[3] = std::max(uv[3], v);
-                }
-                for (int k = 0; k < 4; ++k)
-                    col[k] += (g_color_array_on && g_dbg_col.ptr && !g_dbg_col.buf
-                                   ? dbg_component(c, g_dbg_col, i, k) / (g_dbg_col.type == GL_UNSIGNED_BYTE ? 255.0f : 1.0f)
-                                   : g_cur_color[k]) / float(group);
-            }
-            LOG("frame-trace glow tex %u n %d %s: eye %.0f %.0f %.0f size %.0f uv %.3f..%.3f x %.3f..%.3f col %.2f %.2f %.2f %.2f "
-                "mv t %.0f %.0f %.0f x-axis %.2f %.2f %.2f view %s",
-                bound_tex0(), int(n), mode == GL_TRIANGLES ? "tris" : "other", L[0], L[1], L[2], size, uv[0], uv[2], uv[1], uv[3],
-                col[0], col[1], col[2], col[3], mv.m[12], mv.m[13], mv.m[14], mv.m[0], mv.m[1], mv.m[2],
-                s.view_valid ? (std::fabs(mv.m[12] - s.view[12]) + std::fabs(mv.m[13] - s.view[13]) + std::fabs(mv.m[14] - s.view[14]) < 1.0f ? "= camera" : "model") : "?");
+        post::Scene::Glow& g = s.glows[s.glow_count];
+        for (int k = 0; k < 3; ++k) {
+            g.eye[k] = mv.m[k] * o[0] + mv.m[4 + k] * o[1] + mv.m[8 + k] * o[2] + mv.m[12 + k];
+            g.origin[k] = mv.m[12 + k];
         }
-        if (L[2] > 1.0f) ++s.light_count;  // in front of the camera
+        // size in world units: the model matrix may scale (car lights)
+        const float scale = std::sqrt(mv.m[0] * mv.m[0] + mv.m[1] * mv.m[1] + mv.m[2] * mv.m[2]);
+        g.size = std::max({hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]}) * (scale > 0 ? scale : 1.0f);
+        if (!uv_ok) uv[0] = uv[1] = 0, uv[2] = uv[3] = 1;
+        std::copy(uv, uv + 4, g.uv);
+        g.tex = bound_tex0();
+        g.world = world;
+        g.draw = draw;
+        if (frame_tracing() && q < 6 * 3)
+            LOG("frame-trace glow tex %u draw %d n %d: eye %.0f %.0f %.0f size %.0f uv %.3f..%.3f x %.3f..%.3f origin %.0f %.0f %.0f %s",
+                g.tex, draw, int(n), g.eye[0], g.eye[1], g.eye[2], g.size, uv[0], uv[2], uv[1], uv[3], g.origin[0], g.origin[1],
+                g.origin[2], world ? "city" : "model");
+        ++s.glow_count;
     }
 }
 
@@ -1370,7 +1377,8 @@ void vfb_present(int win_w, int win_h, Fit fit, bool linear, int* rx, int* ry, i
     }
     g_post_view_seen = false;
     g_post_scene.view_valid = false;
-    g_post_scene.light_count = 0;
+    g_post_scene.glow_count = 0;
+    g_glow_draws = 0;
     trace_event("present (end of frame %d)", g_frame);
     ++g_frame;
     // Save the GL state we touch, so the game's (possibly one-time) settings survive.

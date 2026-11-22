@@ -118,6 +118,14 @@ void apply_post_settings(const settings::Settings& s) {
     p.sky_haze = s.fog == "atmospheric" && s.sky_haze;
     p.lights = s.dynamic_lights;
     p.lights_intensity = s.dynamic_lights_intensity;
+    p.street_lights = s.street_lights;
+    p.street_light_range = s.street_light_range;
+    p.headlights = s.headlights;
+    p.headlight_range = s.headlight_range;
+    p.headlight_width = s.headlight_width;
+    p.light_distance = s.light_distance;
+    p.light_coronas = s.light_coronas;
+    p.max_lights = s.max_lights;
     p.test = std::getenv("GANGSTAR_POST_TEST");
     post::set_settings(p);
 }

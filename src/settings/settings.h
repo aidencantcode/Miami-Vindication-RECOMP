@@ -39,7 +39,15 @@ struct Settings {
     bool height_fog = true;                 // fog step 2: thicker near the ground and the sea, sun haze
     float height_fog_amount = 1.0f;         // 0..2
     bool dynamic_lights = true;             // light pools around lamps, neon and car lights (from the game's glow sprites)
-    float dynamic_lights_intensity = 1.0f;  // 0..2
+    float dynamic_lights_intensity = 1.0f;  // 0..2: all dynamic lights
+    float street_lights = 1.0f;             // 0..3: lamps and neon light the street, walls and people
+    float street_light_range = 1.0f;        // 0.5..3: how far around a lamp its light reaches
+    float headlights = 1.0f;                // 0..3: car headlight beams
+    float headlight_range = 30.0f;          // metres
+    float headlight_width = 70.0f;          // degrees, the beam's full horizontal angle
+    float light_distance = 200.0f;          // metres: lamps up to this far light the street
+    bool light_coronas = true;              // far lamps the game no longer draws show as points of light
+    int max_lights = 128;                   // lights per frame (8..256; fewer = faster)
 
     // [controls]
     std::string touch_controls = "auto";    // auto (hide while a pad/keyboard drives) | show | hide

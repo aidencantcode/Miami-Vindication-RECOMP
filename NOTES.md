@@ -992,6 +992,36 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   toward the sun at sunrise / sunset) by `pow(1 - smoothstep(-0.05, h, ray z), 1.2)` × min(0.92, fog
   at the far end), h = 0.18 + 0.18 × that fog (≈ 20° at full fog: the far skyline's height).
   Checked at 06:30 and 18:30 (the sky behind the far towers takes their colour).
+- **Dynamic lights rebuilt** (owner: lights vanish up close, flicker, far ones missing, headlights
+  look like flashlight spots, lampposts should show from far, fps). Causes of the old version: each
+  light's colour was read from the blurred screen at its glow, so a glow above the screen edge (walking
+  under a lamp) or hidden by a car gave a dark colour; only the 24 nearest glows of the frame were used,
+  and the game draws city glows only for grid cells in view and within its range.
+  - Capture (`gles1.cpp glow_capture`): every additive quad with its centre, size, atlas rectangle
+    (texture coordinates are GL_SHORT through the texture matrix; GLES 1 doesn't normalise them) and
+    kind: drawn with the camera view = city billboard (tex 92, batches of up to ~145 quads), else a
+    car's light with its model matrix (frame trace: 1-quad flares at the model origin, and 7-quad
+    headlight beams whose centre lies ~2 m ahead of the origin).
+  - Memory (`post.cpp update_light_memory`): city glows are remembered in world space (merged within
+    3 m), so lamps keep lighting while the camera is close, looks away or is past the game's range;
+    forgotten beyond 1.25 x light_distance, when seen < 3 times, or when in view, 25 m+ away and inside
+    the game's glow range but not drawn for 1.5 s (switched off). Car lights are grouped per draw:
+    beams become spot lights from the mount point along the beam (level, 3.4 degrees down), flares
+    small point lights; matched frame to frame with 80 ms fade-in / 150 ms fade-out.
+  - Light pass: up to `max_lights` (score = reach / distance, car lights first, frustum-culled), data
+    in an RGBA32F texture (ring of 3), drawn as instanced screen rectangles around each light's world box
+    into a half-resolution RGBA16F buffer; colour = the glow sprite's average in the atlas (vertex shader,
+    9 taps). Lamp pools: the height below the lamp counts 30% (the street under a lamp is lit), above
+    100%. Headlights: elliptic cone, width setting x 0.32 tall, range setting. Composite: `c += (c +
+    0.015) * (1 - exp(-light * intensity)) * 1.2` (saturates: overlapping neon can't blow out a wall).
+  - Coronas: remembered lamps 30-50 m+ away that the game draws no glow for get a soft 3-24 px point,
+    hidden by a 5-tap depth test.
+  - Settings: street_lights, street_light_range, headlights, headlight_range, headlight_width,
+    light_distance, light_coronas, max_lights (F1 -> Graphics -> Dynamic lights).
+  - Cost at the owner's settings (1080p, MSAA 8x, draw distance 2.23, night, ~190 remembered lamps,
+    128 drawn): ~0.3 ms (240-260 vs 270 fps). The first coronas were ~1.3 ms: near lamps got coronas
+    hundreds of pixels wide, blended into the MSAA buffer. Debug: `GANGSTAR_POST_TEST=lights` shows only
+    the added light.
 
 ### 5A.1 Sprint forward/back (fixed 2026-11-22)
 - `AnalogStick::processTouch` (decomp_input.c): drag in screen pixels → 480×320 units as

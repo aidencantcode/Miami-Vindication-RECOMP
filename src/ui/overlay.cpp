@@ -262,8 +262,24 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Street lamps, neon, headlights and taillights light up the street, walls,\n"
                                   "people and cars around them (strongest at night).");
-            if (s.dynamic_lights)
-                ch |= ImGui::SliderFloat("Light intensity", &s.dynamic_lights_intensity, 0.0f, 2.0f, "%.2f");
+            if (s.dynamic_lights) {
+                ImGui::Indent();
+                ch |= ImGui::SliderFloat("All lights", &s.dynamic_lights_intensity, 0.0f, 2.0f, "%.2f");
+                ch |= ImGui::SliderFloat("Street lamps and neon", &s.street_lights, 0.0f, 3.0f, "%.2f");
+                ch |= ImGui::SliderFloat("Lamp light reach", &s.street_light_range, 0.5f, 3.0f, "%.2fx");
+                ch |= ImGui::SliderFloat("Headlights", &s.headlights, 0.0f, 3.0f, "%.2f");
+                ch |= ImGui::SliderFloat("Headlight reach", &s.headlight_range, 10.0f, 60.0f, "%.0f m");
+                ch |= ImGui::SliderFloat("Headlight width", &s.headlight_width, 20.0f, 120.0f, "%.0f deg");
+                ch |= ImGui::SliderFloat("Lamps lit up to", &s.light_distance, 50.0f, 500.0f, "%.0f m");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("How far away street lamps still light the street.");
+                ch |= ImGui::Checkbox("Far lamps glow", &s.light_coronas);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Lamps beyond the game's own glow range show as soft points of light,\n"
+                                      "so lit streets stay visible far away.");
+                ch |= ImGui::SliderInt("Most lights at once", &s.max_lights, 16, 256);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Lower is faster (phones, handhelds).");
+                ImGui::Unindent();
+            }
             ImGui::Separator();
             ch |= ImGui::Checkbox("Bloom", &s.bloom);
             if (ImGui::IsItemHovered())

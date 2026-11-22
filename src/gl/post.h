@@ -20,7 +20,15 @@ struct Settings {
     float height_fog_amount = 1.0f; // 0..2
     bool sky_haze = true;           // the sky near the horizon fades into the fog colour (atmospheric fog)
     bool lights = true;             // dynamic lights from the game's glow sprites (light pools)
-    float lights_intensity = 1.0f;  // 0..2
+    float lights_intensity = 1.0f;  // 0..2: all dynamic lights
+    float street_lights = 1.0f;     // 0..3: lamps and neon (pools on the street, walls)
+    float street_light_range = 1.0f;  // 0.5..3: their reach
+    float headlights = 1.0f;        // 0..3: car headlight beams (spot lights)
+    float headlight_range = 30.0f;  // metres
+    float headlight_width = 70.0f;  // degrees, the beam's full horizontal angle
+    float light_distance = 200.0f;  // metres: how far away lamps still light the street
+    bool light_coronas = true;      // distant lamps the game no longer draws show as points of light
+    int max_lights = 128;           // per frame (the nearest / largest win)
     const char* test = nullptr;     // debugging (GANGSTAR_POST_TEST): "invert" | "depth"
 };
 
@@ -38,12 +46,20 @@ struct Scene {
     bool view_valid = false;
     float fog_color[3] = {0.6f, 0.65f, 0.7f};
     float fog_density = 0;          // EXP2 density the bridge uses (0 = no fog this frame)
-    // Dynamic lights (5C.6): every additive glow sprite the game drew this frame (lamps, neon,
-    // headlights, taillights, police lights: the light-effects atlas), in eye space; xyz = centre,
-    // w = radius of the light it casts.
-    static constexpr int kMaxLights = 256;
-    float lights[kMaxLights][4] = {};
-    int light_count = 0;
+    // Dynamic lights (5C.6): every additive glow quad the game drew this frame (lamps, neon,
+    // headlights, taillights, police lights: the light-effects atlas).
+    struct Glow {
+        float eye[3];       // quad centre, eye space
+        float size;         // largest extent (world units)
+        float uv[4];        // its rectangle in the atlas, after the texture matrix (u0, v0, u1, v1)
+        float origin[3];    // the draw's model origin, eye space (a car light's mount point)
+        unsigned tex;       // the atlas (GL texture)
+        bool world;         // drawn with the camera view: a city billboard (static); else a car's light
+        int draw;           // draw call index this frame (the quads of one beam share it)
+    };
+    static constexpr int kMaxGlows = 1024;
+    Glow glows[kMaxGlows] = {};
+    int glow_count = 0;
 };
 
 bool init();                        // after the GL context exists: load entry points, build shaders
