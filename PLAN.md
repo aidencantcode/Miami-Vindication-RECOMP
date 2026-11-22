@@ -320,6 +320,11 @@ Suggested order: shared root causes first (5A.0), then audio, then input, then t
   - ✔ when walking and looking around never locks onto anything by itself; RT/RMB aims where the
     crosshair points (hit a chosen NPC, car or tyre); LT/MMB locks the nearest target; RB/RMB fires
     from a car.
+  - **Done 2026-11-22** (NOTES §5A.4): no tap-to-target, no automatic lock; LT/MMB auto-aim; RT/RMB
+    manual aim with GTA VC crosshair and a GTA V-style over-the-shoulder camera (owner's request),
+    bullets redirected to what is under the crosshair; F1 table and README updated. Open: the aim
+    animation holds the arm a little above the crosshair (visual only); tyres are not separate
+    targets in this engine (Box2D bodies per vehicle); drive-by with RB not yet play-tested.
 - **5A.5** merged into 5A.4.
 - **5A.6 Real free look (camera).** GTA VC PC-style: snappy, direct mouse movement (no smoothing or
   acceleration), the camera **stays where you leave it**, and it only drifts back behind the player
@@ -328,6 +333,7 @@ Suggested order: shared root causes first (5A.0), then audio, then input, then t
   speed. ✔ on foot and in cars.
 - **5A.7 Weapon switching:** mouse wheel (already mapped, broken by 5A.0's too-short pulse), keys
   1/2, controller D-pad left/right (moved off LB/RB, see 5A.4). ✔ together with 5A.0.
+  **Done 2026-11-22**: calls `Player::switchWeapon` directly (the selector is not a HUD button).
 - **5A.8 Night, sunrise and sunset lighting too bright, no blue night tint.** The phone version
   had this problem on some hardware too. Leads: `CustomSkyBoxSceneNode::setSkyColor`, the
   time-of-day / ambient / fog parameters in the data, and GL state the bridge may not reproduce

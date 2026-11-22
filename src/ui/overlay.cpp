@@ -279,6 +279,7 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
                     {"Move / steer", "Left stick", "WASD / arrows"},
                     {"Camera", "Right stick", "Mouse (mouse look), else right-drag"},
                     {"Fire", "RB", "Left click (on foot), right click (in a car), Space, Left Ctrl"},
+                    {"Aim with crosshair (hold)", "RT (on foot)", "Right click (on foot, hold)"},
                     {"Auto-aim: lock the nearest (hold)", "LT (on foot)", "Middle click (hold)"},
                     {"Accelerate / brake", "RT / LT (in a car)", "W / S"},
                     {"Sprint", "A", "Shift"},
@@ -425,7 +426,7 @@ bool draw(settings::Settings& cfg, const FrameStats& st) {
     const auto now = std::chrono::steady_clock::now();
     g_toasts.erase(std::remove_if(g_toasts.begin(), g_toasts.end(), [&](const Toast& t) { return t.until < now; }),
                    g_toasts.end());
-    if (!g_open && !cfg.show_fps && g_toasts.empty() && !st.fast_forward) return false;
+    if (!g_open && !cfg.show_fps && g_toasts.empty() && !st.fast_forward && !st.crosshair) return false;
 
     ImGui_ImplOpenGL3_NewFrame();
     platform_new_frame();
@@ -460,6 +461,17 @@ bool draw(settings::Settings& cfg, const FrameStats& st) {
         ImGui::Begin("##toast", nullptr, passive);
         for (const Toast& t : g_toasts) ImGui::TextUnformatted(t.text.c_str());
         ImGui::End();
+    }
+    if (st.crosshair && !g_open && st.view_w > 0) {  // GTA Vice City style: thin circle and a centre dot
+        const ImVec2 k = ImGui::GetIO().DisplayFramebufferScale;
+        const float sx = k.x > 0 ? k.x : 1, sy = k.y > 0 ? k.y : 1;
+        const ImVec2 c((st.view_x + st.view_w * 0.5f) / sx, (st.view_y + st.view_h * 0.5f) / sy);
+        const float r = std::max(8.0f, st.view_h * 0.03f / sy), w = std::max(1.5f, st.view_h / 400.0f / sy);
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        dl->AddCircle(c, r, IM_COL32(0, 0, 0, 150), 32, w + 2);
+        dl->AddCircle(c, r, IM_COL32(255, 255, 255, 230), 32, w);
+        dl->AddCircleFilled(c, w + 1.5f, IM_COL32(0, 0, 0, 150), 12);
+        dl->AddCircleFilled(c, w * 0.9f, IM_COL32(255, 255, 255, 240), 12);
     }
     if (g_open) changed = settings_window(cfg, st);
     ImGui::Render();

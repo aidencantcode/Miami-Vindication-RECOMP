@@ -91,6 +91,7 @@ HOOKABLE = {
     "_ZN7DayTime6updateEd",  # time-of-day override (GANGSTAR_TIME)
     "_ZN9HudScreen19processTouchReleaseEv",  # aiming: no tap-to-target (5A.4)
     "_ZN9Character19getAttackableTargetEv",  # aiming: no automatic lock (5A.4)
+    "_ZN6Weapon5shootEP9CharacterN6glitch4core8vector3dIfEES5_b",  # manual aim: shots to the crosshair
 }
 
 

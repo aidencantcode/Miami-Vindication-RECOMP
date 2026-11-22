@@ -71,6 +71,18 @@ uint32_t g_gat_self = 0;           // getAttackableTarget's this (pre -> post)
 double g_reacquire = 0;            // seconds until the next auto-aim search
 int g_weapon_steps = 0;            // queued weapon switches (+next / -previous)
 int g_screen_w = 800, g_screen_h = 480;  // the game's logical screen (from controls())
+// Manual aim (RT / right mouse): Character::aim(bool) already aims the player at the screen
+// centre when no target is locked and the weapon is out (Player+0x688 set; the phone did this
+// after shooting with nothing locked). Holding aim keeps the weapon out and moves the camera
+// over the shoulder; the crosshair marks the screen centre.
+bool g_manual_aim = false, g_manual_was = false;
+float g_aim_blend = 0;                   // 0 = game camera, 1 = over the shoulder
+float g_aim_eye[3] = {}, g_aim_dir[3] = {};  // the aim camera (eye, unit view direction) last placed
+bool g_aim_valid = false;
+constexpr uint32_t kPlayerWeaponOut = 0x688;  // Player: weapon drawn / aiming (time, 0 = lowered)
+
+uint32_t player_obj(rt::Runtime& r);
+void shoulder_camera(cpu::Cpu& c, uint32_t cam, uint32_t node);
 
 uint32_t player_obj(rt::Runtime& r) {
     static const uint32_t var = r.lib_object("_ZN6Player8s_playerE");
@@ -105,6 +117,8 @@ void log_profile(cpu::Cpu& c, const char* when) {
 }
 
 }  // namespace
+
+uint32_t target_at_screen_center(cpu::Cpu& c);  // below
 
 void install(rt::Runtime& rt, const settings::Settings& s) {
     g_rt = &rt;
@@ -217,7 +231,7 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
     // the active camera (this+8) is the FollowCamera; driving, cutscenes etc. are untouched.
     rt.hook_function("_ZN13CameraManager6updateEi", {
         [](cpu::Cpu& c) {
-            g_cm_self = g_camera_mode == "first_person" ? c.reg(cpu::R0) : 0;
+            g_cm_self = g_camera_mode == "first_person" || g_aim_blend > 0 ? c.reg(cpu::R0) : 0;
             return false;
         },
         [](cpu::Cpu& c) {
@@ -229,6 +243,10 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
             const uint32_t cam = m.r32(cm + 8), node = m.r32(cm);
             static const uint32_t follow_vt = r.lib_object("_ZTV12FollowCamera") + 8;
             if (!cam || !node || m.r32(cam) != follow_vt) return;
+            if (g_aim_blend > 0) {
+                shoulder_camera(c, cam, node);
+                return;
+            }
             float pos[3], look[3], d[3], len = 0;
             for (int i = 0; i < 3; ++i) {
                 pos[i] = f32_at(cam + 0x08 + 4 * i);
@@ -330,6 +348,62 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
             if (p && self == p + 4) c.set_reg(cpu::R0, 0);
         }});
 
+    // Manual aim: every bullet of the player goes to the crosshair. Weapon::shoot(Character*,
+    // vector3d from, vector3d dir, bool): vector3d has a copy constructor, so GCC passes both by
+    // invisible reference (r2 = &from, r3 = &dir, caller-owned temporaries; checked: reading them
+    // as floats gave NaNs). The game points the gun at the far end of the crosshair ray, so close
+    // targets were missed by the camera-to-gun offset; aim from the muzzle at what is under the
+    // crosshair instead (a person's chest, a vehicle), else at the crosshair ray's far point.
+    rt.hook_function("_ZN6Weapon5shootEP9CharacterN6glitch4core8vector3dIfEES5_b", {[](cpu::Cpu& c) {
+        if (!g_pc_aim || g_aim_blend < 0.5f || !g_aim_valid) return false;
+        auto& r = c.rt();
+        auto& m = r.mem();
+        const uint32_t p = player_obj(r);
+        if (!p || c.reg(cpu::R1) != p + 4) return false;
+        const uint32_t from_p = c.reg(cpu::R2), dir_p = c.reg(cpu::R3);
+        if (!from_p || !dir_p) return false;
+        float from[3], dir[3];
+        for (int i = 0; i < 3; ++i) {
+            from[i] = f32_at(from_p + 4 * i);
+            dir[i] = f32_at(dir_p + 4 * i);
+            if (!std::isfinite(from[i]) || !std::isfinite(dir[i])) return false;
+        }
+        float aim[3];
+        const uint32_t t = target_at_screen_center(c);
+        static uint32_t scratch = 0;
+        if (!scratch) scratch = r.heap().alloc(16);
+        if (t) {
+            c.call(m.r32(m.r32(t) + 0x5c), {scratch, t});  // LevelObject::getPosition (feet)
+            const bool person = c.call(r.lib_func("_ZN17GameObjectManager11isCharacterEPK11LevelObject"), {t}) != 0;
+            for (int i = 0; i < 3; ++i) aim[i] = f32_at(scratch + 4 * i);
+            aim[2] += person ? 110.0f : 60.0f;  // chest / body
+        } else {
+            // Nothing under the crosshair: where its ray meets the ground at the player's feet
+            // (no world raycast yet), else 60 m along it.
+            float reach = 6000.0f;
+            c.call(m.r32(m.r32(p + 4) + 0x5c), {scratch, p + 4});
+            const float ground = f32_at(scratch + 8);
+            if (g_aim_dir[2] < -0.01f) reach = std::min(reach, (g_aim_eye[2] - ground) / -g_aim_dir[2]);
+            for (int i = 0; i < 3; ++i) aim[i] = g_aim_eye[i] + g_aim_dir[i] * reach;
+        }
+        float nd[3], l = 0;
+        for (int i = 0; i < 3; ++i) l += (nd[i] = aim[i] - from[i]) * nd[i];
+        if (l < 1) return false;
+        l = std::sqrt(l);
+        for (int i = 0; i < 3; ++i) {
+            nd[i] /= l;
+            uint32_t bits;
+            std::memcpy(&bits, &nd[i], 4);
+            m.w32(dir_p + 4 * i, bits);
+        }
+        static int logged = 0;
+        if (logged++ < 8)
+            LOG("aim: shot from %.0f %.0f %.0f dir %.2f %.2f %.2f (|%.2f|) -> %.2f %.2f %.2f at %s %08x (%.0f away)", from[0],
+                from[1], from[2], dir[0], dir[1], dir[2], std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]),
+                nd[0], nd[1], nd[2], t ? "target" : "far point", t, l);
+        return false;
+    }, nullptr});
+
     // ---- virtual steering (tilt mode) -------------------------------------------------------------
     rt.hook_function("_ZN21DrivingControlHandler18handleAccelerationEPK14EvAcceleration", {[](cpu::Cpu& c) {
         if (!g_steer_on) return false;  // real accelerometer: the game's own code
@@ -352,6 +426,60 @@ void set_camera_mode(const std::string& mode) { g_camera_mode = mode; }
 // The person or vehicle at the screen centre: the phone's tap picker (HudScreen::tappedTarget: a ray
 // from the camera through the point, hit boxes that grow with distance; people first, then
 // vehicles; never the dead). Its `this` is not used, so any pointer will do.
+namespace {
+// Over-the-shoulder aim camera (GTA V style): from the follow camera's position and look-at point
+// (the character's upper body), keep its view direction but move the eye close behind the right
+// shoulder; blended in and out by g_aim_blend. Set on the scene camera node like first person.
+void shoulder_camera(cpu::Cpu& c, uint32_t cam, uint32_t node) {
+    auto& r = c.rt();
+    auto& m = r.mem();
+    float pos[3], look[3], d[3], len = 0;
+    for (int i = 0; i < 3; ++i) {
+        pos[i] = f32_at(cam + 0x08 + 4 * i);
+        look[i] = f32_at(cam + 0x14 + 4 * i);
+        d[i] = look[i] - pos[i];
+        len += d[i] * d[i];
+    }
+    if (len <= 1e-6f) return;
+    len = std::sqrt(len);
+    for (float& v : d) v /= len;
+    // Z is up (logged: player z 185 at the feet, look-at = head at +180, camera 455 units back);
+    // right = forward x up.
+    const float up[3] = {0, 0, 1};
+    float right[3] = {d[1] * up[2] - d[2] * up[1], d[2] * up[0] - d[0] * up[2], d[0] * up[1] - d[1] * up[0]};
+    const float rl = std::sqrt(right[0] * right[0] + right[1] * right[1] + right[2] * right[2]);
+    if (rl < 1e-4f) return;
+    for (float& v : right) v /= rl;
+    const float back = len * 0.62f, side = len * 0.22f, rise = len * 0.02f;  // relative to the game's distance
+    const float t = g_aim_blend * g_aim_blend * (3 - 2 * g_aim_blend);  // smoothstep
+    // The follow camera looks ~9 degrees down at the player; aim ~4 degrees higher, so the crosshair
+    // rests near chest height instead of on the pavement (the player can still look up and down).
+    float ad[3] = {d[0], d[1], d[2] + 0.07f * t}, al = 0;
+    for (float v : ad) al += v * v;
+    al = std::sqrt(al);
+    for (float& v : ad) v /= al;
+    float eye[3], tgt[3];
+    for (int i = 0; i < 3; ++i) {
+        const float ots = look[i] - d[i] * back + right[i] * side + up[i] * rise;
+        eye[i] = pos[i] + (ots - pos[i]) * t;
+        tgt[i] = eye[i] + ad[i] * 1000.0f;
+    }
+    static uint32_t buf = 0;
+    if (!buf) buf = r.heap().alloc(32);
+    m.write(buf, eye, 12);
+    m.write(buf + 16, tgt, 12);
+    for (int i = 0; i < 3; ++i) {  // what manual-aim shots aim along (see the Weapon::shoot hook)
+        g_aim_eye[i] = eye[i];
+        g_aim_dir[i] = ad[i];
+    }
+    g_aim_valid = true;
+    const uint32_t vt = m.r32(node);
+    c.call(m.r32(vt + 0xa4), {node, buf});        // setPosition
+    c.call(m.r32(vt + 0x104), {node, buf + 16});  // setTarget
+}
+
+}  // namespace
+
 uint32_t target_at_screen_center(cpu::Cpu& c) {
     auto& r = c.rt();
     static uint32_t scratch = 0;
@@ -364,7 +492,11 @@ uint32_t target_at_screen_center(cpu::Cpu& c) {
                            {g_hud ? g_hud : scratch, scratch, scratch + 16}));
 }
 
-void set_aim_input(bool auto_aim) { g_auto_aim = auto_aim; }
+void set_aim_input(bool auto_aim, bool manual_aim) {
+    g_auto_aim = auto_aim;
+    g_manual_aim = manual_aim && !auto_aim;
+}
+bool manual_aiming() { return g_aim_blend > 0.5f; }
 void switch_weapon(int step) { g_weapon_steps = std::clamp(g_weapon_steps + step, -3, 3); }
 
 void frame(cpu::Cpu& c, double dt) {
@@ -405,6 +537,25 @@ void frame(cpu::Cpu& c, double dt) {
     }
     if (!g_auto_aim) g_reacquire = 0;
     g_auto_aim_was = g_auto_aim;
+
+    // Manual aim: keep the weapon out (the game then turns the player and points the gun at the
+    // screen centre every update); lower it again on release if nothing else raised it.
+    const bool in_vehicle = c.call(r.lib_func("_ZNK9Character12isInAVehicleEv"), {p + 4}) != 0;
+    const bool aiming = g_manual_aim && !in_vehicle;
+    if (aiming) {
+        if (!g_manual_was) LOG("aim: manual aim on");
+        if (m.r32(p + kPlayerWeaponOut) == 0) {
+            c.call(r.lib_func("_ZN9Character10drawWeaponEv"), {p + 4});
+            m.w32(p + kPlayerWeaponOut, 1);
+        }
+    } else if (g_manual_was) {
+        if (m.r32(p + kPlayerWeaponOut) == 1) m.w32(p + kPlayerWeaponOut, 0);
+        LOG("aim: manual aim off");
+    }
+    g_manual_was = aiming;
+    const float rate = float(dt) / 0.15f;  // camera move in/out time
+    g_aim_blend = std::clamp(g_aim_blend + (aiming ? rate : -rate), 0.0f, 1.0f);
+    if (g_aim_blend == 0) g_aim_valid = false;
 }
 
 uint32_t take_camera_to_watch() {

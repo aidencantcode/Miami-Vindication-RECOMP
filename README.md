@@ -218,15 +218,17 @@ Two bugs it found, each within minutes:
 |---|---|---|
 | Move / steer | Left stick | WASD / arrows |
 | Camera | Right stick | Mouse (mouse look), else right-drag |
-| Attack | RT (B in a car) | Left click (mouse look), Space, Left Ctrl |
-| Accelerate / brake | RT / LT | W / S |
+| Fire | RB | Left click (on foot), right click (in a car), Space, Left Ctrl |
+| Aim with crosshair, over the shoulder (hold) | RT (on foot) | Right click (on foot) |
+| Auto-aim: lock the nearest (hold) | LT (on foot) | Middle click |
+| Accelerate / brake | RT / LT (in a car) | W / S |
 | Sprint | A | Shift |
-| Cover | LT / B | Q |
+| Cover | B | Q |
 | Enter / exit car | Y (hold to enter when near) | F |
 | Interact (shop, mission, save) | X | E |
-| Weapon prev / next | LB / RB | 1 / 2, mouse wheel |
+| Weapon prev / next | D-pad left / right | 1 / 2, mouse wheel |
 | Map | Back | M |
-| Radio on/off, next station | D-pad up / right | R / T |
+| Radio on/off, next station | D-pad up / down | R / T |
 | Pause / back | Start (B in menus) | Esc |
 | Fast forward | R3 | F2 |
 | Settings overlay | Guide or L3+R3 | F1 |

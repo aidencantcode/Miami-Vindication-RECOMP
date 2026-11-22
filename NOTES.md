@@ -983,6 +983,29 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   RT aim (manual aim: next step), B cover, d-pad left/right weapons, up/down radio.
 - Seen once, not reproduced: during LT + RB the weapon went pistol → bat → fists (no switch call
   of ours in that run was logged; logging was added afterwards). Watch for it.
+- **Manual aim (RT / right mouse, done 2026-11-22)**: `Character::aim(bool)` already aims the player at
+  the screen centre when no target is locked (ray from the camera node through
+  `Application::getScreenCenter`, body turned with `Character::rotate`, 9-way aim blend), and
+  `Player::updateLockTarget` calls it whenever Player+0x688 (weapon out) is set. Holding aim calls
+  `Character::drawWeapon` and keeps +0x688 non-zero (1 = set by us, cleared on release).
+  World is **Z-up** (player z 185 at the feet, follow-camera look-at = head at +180, camera 455
+  units back). Over-the-shoulder camera in the `CameraManager::update` post hook: eye = look-at
+  − dir·0.62d + right·0.22d + up·0.02d (d = game camera distance), view direction tilted ~4° up
+  (the follow camera looks ~9° down), blended in 0.15 s; set on the scene camera node like first
+  person. Crosshair: ImGui foreground circle +
+  dot at the centre of the game image (`ui::FrameStats::crosshair`). Verified: camera, crosshair,
+  player turns and raises the gun, fires at the centre, release restores everything.
+- `Weapon::shoot(Character*, vector3d, vector3d, bool)` takes the vectors **by invisible
+  reference** (r2 = &from, r3 = &dir; vector3d has a copy constructor): reading r2/r3/[sp] as
+  floats gave NaNs. The shot hook rewrites *dir to aim from the muzzle at the target under the
+  crosshair (tappedTarget at the screen centre: chest +110 / vehicle +60), else where the
+  crosshair ray meets the ground at the player's feet (no world raycast yet), else 60 m along it.
+  (One earlier test run wrote into the caller's stack before this was understood.) Verified:
+  shots follow the crosshair; the game's own gun direction pointed ~8° above it.
+- Open: the aim animation holds the arm ~8° above the crosshair line (visual only; bullets are
+  corrected). Fix candidates: offset the 9-way aim blend (`Character::aim(float, float)`), or
+  give `Character::aim(bool)` a lower target. Walls are not raycast for the no-target case
+  (`LevelObject::TestRay` signature still to confirm).
 
 ### 5C draw distance and LOD (findings 2026-11-21, nothing changed yet)
 - The `draw_distance` setting is applied once, in the `loadPerformanceProfile` hook, so it needs a

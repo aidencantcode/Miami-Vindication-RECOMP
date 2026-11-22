@@ -59,7 +59,9 @@ void set_camera_mode(const std::string& mode);
 
 // Aiming (PC scheme unless [controls] tap_to_target): no tap-to-target and no automatic lock;
 // auto-aim held (LT / middle mouse) locks the game's own pick, release unlocks.
-void set_aim_input(bool auto_aim);
+void set_aim_input(bool auto_aim, bool manual_aim);
+// Manual aim is on (crosshair, over-the-shoulder camera).
+bool manual_aiming();
 // Queue weapon switches (+1 next, -1 previous); done in frame() through Player::switchWeapon.
 void switch_weapon(int step);
 // Once per frame before the game runs (main CPU idle): weapon switches, auto-aim.

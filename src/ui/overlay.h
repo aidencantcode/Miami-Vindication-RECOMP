@@ -20,6 +20,8 @@ struct FrameStats {
     int game_w = 0, game_h = 0;      // what the game is told
     int fast_forward = 0;            // current fast-forward speed (0 = off)
     double input_latency_ms = 0;     // input event -> frame presented (average; 0 = no input lately)
+    bool crosshair = false;          // manual aim: crosshair at the centre of the game image
+    int view_x = 0, view_y = 0, view_w = 0, view_h = 0;  // the game image in the window (pixels, y from the top)
 };
 
 bool init(SDL_Window* win, SDL_GLContext ctx);

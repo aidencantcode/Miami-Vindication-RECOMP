@@ -114,7 +114,7 @@ void Input::release_all() {
     rmb_down_ = false;
     rmb_dx_ = rmb_dy_ = 0;
     rmb_held_ = mmb_held_ = false;
-    mods::set_aim_input(false);
+    mods::set_aim_input(false, false);
     key_edge(AK_BACK, false, &prev_back_);
     key_edge(AK_MENU, false, &prev_menu_);
     if (tilting_) {
@@ -469,7 +469,7 @@ void Input::drive_gameplay(const std::vector<mods::Control>& controls, const Gam
     if (gi.act[A_WEAPON_PREV] && !weapon_prev_) mods::switch_weapon(-1);
     weapon_next_ = gi.act[A_WEAPON_NEXT];
     weapon_prev_ = gi.act[A_WEAPON_PREV];
-    mods::set_aim_input(!driving_ && gi.act[A_AUTO_AIM]);
+    mods::set_aim_input(!driving_ && gi.act[A_AUTO_AIM], !driving_ && gi.act[A_AIM]);
 
     // camera: a continuous drag on empty screen space that re-grabs before it reaches a control
     const float speed = 700.0f * mouse_sens_;  // game pixels per second at full deflection
@@ -495,7 +495,7 @@ void Input::drive_gameplay(const std::vector<mods::Control>& controls, const Gam
 }
 
 void Input::drive_menus(const GameInput& gi, double dt) {
-    mods::set_aim_input(false);
+    mods::set_aim_input(false, false);
     if (gi.mx != 0 || gi.my != 0) {
         cursor_on_ = true;
         cursor_x_ = std::clamp(cursor_x_ + float(gi.mx * 650.0 * dt), 0.0f, float(game_w_ - 1));

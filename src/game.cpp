@@ -480,6 +480,11 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 const settings::Settings before = cfg;
                 stats.render_w = gles1::vfb_config().width;
                 stats.render_h = gles1::vfb_config().height;
+                stats.crosshair = mods::manual_aiming() && !menu_open;
+                stats.view_x = rx;
+                stats.view_y = ry;
+                stats.view_w = rw;
+                stats.view_h = rh;
                 if (ui::draw(cfg, stats)) {
                     if (cfg.window_mode != before.window_mode) apply_window_mode(win, cfg);
                     if (cfg.vsync != before.vsync) SDL_GL_SetSwapInterval(cfg.vsync ? 1 : 0);
