@@ -533,6 +533,14 @@ void Input::drive_gameplay(const std::vector<mods::Control>& controls, const Gam
         }
         const mods::Control* c = want ? find_type(kActionTypes[a]) : nullptr;
         int& p = act_ptr_[a];
+        static const bool trace = std::getenv("GANGSTAR_INPUT_TRACE") != nullptr;
+        if (trace && a == A_ATTACK) {  // VirtualButton +0xC: bit 0 shown, bit 1 pressed
+            static int last = -2;
+            const mods::Control* ab = find_type(kActionTypes[a]);
+            const int st = ab ? int(g_.rt->mem().r32(ab->obj + 0xc) & 0xff) : -1;
+            if (st != last) LOG("[trace] attack button state %x (fire %s)", st, want ? "held" : "released");
+            last = st;
+        }
         if (c) {
             if (!p) {  // grab a free pointer id
                 for (int id = P_FIRST_BUTTON; id <= P_LAST && !p; ++id) {

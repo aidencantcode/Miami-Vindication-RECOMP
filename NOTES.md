@@ -958,6 +958,17 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   candidate file's level (read once, cached). Also: a texture id refilled with uncompressed data is
   forgotten. `GANGSTAR_NIGHTTEX_CHECK=1` runs every day file through the matcher: 357/357 levels
   match their own file, the 4 look-alikes are rejected.
+- **"Manual aim zooms in but won't fire" (after shooting and stopping): not reproduced.** 13 scripted
+  sequences with the pistol (fire / release / aim / fire at 0.1-1 s gaps, aim pressed while firing,
+  aim released while firing, a full clip emptied, R then aim, free look turned 90-180° before
+  aiming): every held press fired. The game side: `VirtualButton +0xC` bit 0 = shown, bit 1 =
+  pressed; `VirtualButton::update` polls touches inside its rectangle; the first press raises the
+  "pressed" event (handleAttackButton: weapon +0xA3 = 1 if clip > 0 or ammo, then
+  `Character::useWeapon`), later frames "held"; release only clears bit 1 while the button is shown.
+  `Character::useWeapon` skips the shot while the reload animation (0x79) runs. Added a diagnostic to
+  the normal log: fire held 1.5 s on foot with a gun and no `Weapon::shoot` → one line `fire: held
+  1.5 s without a shot: attack button <flags>, weapon type, clip, reload anim, aim state, target`.
+  **Open:** needs the owner's runtime.log line from when it happens (and which weapon).
 
 ### 5A.1 Sprint forward/back (fixed 2026-11-22)
 - `AnalogStick::processTouch` (decomp_input.c): drag in screen pixels → 480×320 units as

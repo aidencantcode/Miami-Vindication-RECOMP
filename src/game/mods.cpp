@@ -94,6 +94,7 @@ bool g_auto_aim = false, g_auto_aim_was = false;  // lock held (LT)
 bool g_lock_toggled = false, g_toggle_request = false;  // middle click lock
 bool g_firing = false, g_fire_suppressed = false;
 double g_fire_hold = 0;           // seconds the fire auto-aim stays on after the last shot
+int g_player_shots = 0;           // Weapon::shoot calls by the player (fire diagnostics)
 constexpr double kFireAimHold = 1.0;
 bool g_fire_auto = false;         // the game may pick the player's target (fire auto-aim active)
 bool g_reload_request = false;
@@ -505,6 +506,7 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
             const uint32_t fp = c.reg(cpu::R2);  // the shot's origin (the muzzle), by reference
             const float x = f32_at(fp), y = f32_at(fp + 4), z = f32_at(fp + 8);
             if (std::isfinite(x) && std::isfinite(y) && std::isfinite(z)) post::flash(x, y, z);
+            ++g_player_shots;
         }
         if (!g_pc_aim || g_aim_blend < 0.5f || !g_aim_valid) return false;
         auto& r = c.rt();
@@ -831,6 +833,39 @@ void frame(cpu::Cpu& c, double dt) {
         LOG("weapon: reload");
     }
     g_reload_request = false;
+    // Fire held 1.5 s on foot without a shot (owner saw "aims but won't fire", not reproduced in
+    // tests): log why, once per press, so the owner's runtime.log shows it.
+    {
+        static double held = 0;
+        static int shots_at_press = 0;
+        if (g_firing && !in_vehicle) {
+            if (held == 0) shots_at_press = g_player_shots;
+            held += dt;
+            if (held > 1.5 && held - dt <= 1.5 && g_player_shots == shots_at_press) {
+                const uint32_t ch = p + 4;
+                const uint32_t w = uint32_t(c.call(m.r32(m.r32(ch) + 0x13c), {ch}));
+                const bool melee = !w || (c.call(r.lib_func("_ZNK6Weapon7isMeleeEv"), {w}) & 0xff) != 0;
+                if (!melee || g_input_trace) {  // fists / bat never shoot
+                    const bool gun_mode = c.call(m.r32(m.r32(ch) + 0x110), {ch}) != 0;
+                    const bool reload_anim = c.call(r.lib_func("_ZNK17CharacterAnimator18isCurrentAnimationEib"), {ch + 0x2c, 0x79, uint32_t(gun_mode)}) != 0;
+                    const bool anim_ended = c.call(r.lib_func("_ZNK17CharacterAnimator16isAnimationEndedEb"), {ch + 0x2c, uint32_t(gun_mode)}) != 0;
+                    int button = -1;  // the visible attack button's VirtualButton +0xC (bit 0 shown, bit 1 pressed)
+                    for (const Control& ctl : controls(r, g_screen_w, g_screen_h))
+                        if (ctl.visible && ctl.type == 0) button = int(m.r32(ctl.obj + 0xc) & 0xff);
+                    LOG("fire: held 1.5 s without a shot: attack button %x, weapon %08x type %d clip %d melee %d, "
+                        "reload anim %d (ended %d), gun mode %d, manual aim %d (blend %.2f), auto-aim %d, lock %d, "
+                        "target %08x, weapon out %u", button,
+                        w, w ? int(c.call(r.lib_func("_ZNK6Weapon13getWeaponTypeEv"), {w})) : -1,
+                        w ? int(c.call(r.lib_func("_ZNK6Weapon7getClipEv"), {w})) : -1,
+                        int(melee), int(reload_anim), int(anim_ended),
+                        int(gun_mode), int(g_manual_aim), g_aim_blend, int(g_auto_aim), int(g_lock_toggled),
+                        m.r32(p + kPlayerTarget), m.r32(p + kPlayerWeaponOut));
+                }
+            }
+        } else {
+            held = 0;
+        }
+    }
     if (!g_pc_aim) return;
     auto find_target = [&](const char** how) {
         g_allow_auto_target = true;
