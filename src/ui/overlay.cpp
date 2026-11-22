@@ -243,6 +243,12 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
                 ImGui::SetTooltip("Extra haze close to the ground and over the sea, and a warm glow toward\n"
                                   "the sun at sunrise and sunset (screen effect).");
             if (s.height_fog) ch |= ImGui::SliderFloat("Ground fog amount", &s.height_fog_amount, 0.0f, 2.0f, "%.2f");
+            ch |= ImGui::Checkbox("Dynamic lights", &s.dynamic_lights);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Street lamps, neon, headlights and taillights light up the street, walls,\n"
+                                  "people and cars around them (strongest at night).");
+            if (s.dynamic_lights)
+                ch |= ImGui::SliderFloat("Light intensity", &s.dynamic_lights_intensity, 0.0f, 2.0f, "%.2f");
             ImGui::Separator();
             ch |= ImGui::Checkbox("Bloom", &s.bloom);
             if (ImGui::IsItemHovered())

@@ -18,6 +18,8 @@ struct Settings {
     float bloom_radius = 1.0f;      // 0.5..2: blur size
     bool height_fog = true;         // fog step 2: thicker near the ground / sea, sun haze (needs depth)
     float height_fog_amount = 1.0f; // 0..2
+    bool lights = true;             // dynamic lights from the game's glow sprites (light pools)
+    float lights_intensity = 1.0f;  // 0..2
     const char* test = nullptr;     // debugging (GANGSTAR_POST_TEST): "invert" | "depth"
 };
 
@@ -35,6 +37,12 @@ struct Scene {
     bool view_valid = false;
     float fog_color[3] = {0.6f, 0.65f, 0.7f};
     float fog_density = 0;          // EXP2 density the bridge uses (0 = no fog this frame)
+    // Dynamic lights (5C.6): every additive glow sprite the game drew this frame (lamps, neon,
+    // headlights, taillights, police lights: the light-effects atlas), in eye space; xyz = centre,
+    // w = radius of the light it casts.
+    static constexpr int kMaxLights = 256;
+    float lights[kMaxLights][4] = {};
+    int light_count = 0;
 };
 
 bool init();                        // after the GL context exists: load entry points, build shaders
@@ -42,6 +50,8 @@ void set_settings(const Settings& s);
 // Game clock (minutes since midnight) for the sun haze direction: the game's light 0 is a point at
 // the origin, not the sun. World axes (from the minimap and the sea): +x east, +y north, +z up.
 void set_time_of_day(int minute);
+// A muzzle flash at a world position: a short orange light (dynamic lights on).
+void flash(float x, float y, float z);
 bool active();                      // any pass is on (else run() does nothing)
 void run(const Scene& scene);
 

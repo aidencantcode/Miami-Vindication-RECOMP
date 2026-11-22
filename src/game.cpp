@@ -103,6 +103,8 @@ void apply_post_settings(const settings::Settings& s) {
     p.bloom_radius = s.bloom_radius;
     p.height_fog = s.height_fog;
     p.height_fog_amount = s.height_fog_amount;
+    p.lights = s.dynamic_lights;
+    p.lights_intensity = s.dynamic_lights_intensity;
     p.test = std::getenv("GANGSTAR_POST_TEST");
     post::set_settings(p);
 }

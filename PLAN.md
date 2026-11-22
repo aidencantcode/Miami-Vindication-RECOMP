@@ -307,7 +307,7 @@ Queue:
 - ✅ Q6 Post-process groundwork (5C.0): pass between the 3D scene and the HUD, readable depth.
 - ✅ Q7 Bloom (5C.5).
 - ✅ Q8 Fog step 2 (5C.4): height fog, sun haze at sunrise/sunset, bloom stronger in fog.
-- Q9 Dynamic lights (5C.6, owner said yes): car headlights/taillights, lampposts, muzzle flash.
+- ✅ Q9 Dynamic lights (5C.6, owner said yes): car headlights/taillights, lampposts, muzzle flash.
 - Q10 Android (5B), renderer chosen by us for Snapdragon **and** Mali: arm64 build, GLES 3 shader
   backend, texture decode, touch/tilt/controller, speed work, APK with saves in the app folder.
   Shader code for Q6-Q9 must stay portable to it (GLSL that builds as desktop GL and GLES 3).

@@ -243,7 +243,8 @@ void trace_draw(GLuint tex0, int count) {
         std::snprintf(buf, sizeof buf, "ortho");
     }
     std::string sig = std::string(buf) + (g_fog_on ? " fog" : "") + (g_depth_test ? " ztest" : "") +
-                      (g_depth_write ? " zwrite" : "") + (g_lighting ? " lit" : "") + (g_blend ? " blend" : "");
+                      (g_depth_write ? " zwrite" : "") + (g_lighting ? " lit" : "") +
+                      (g_blend ? (g_blend_dst == GL_ONE ? " blend-add" : " blend") : "");
     {  // real GL state, to check the shadows and see how each kind of object is drawn
         GLint env = 0;
         p_glActiveTexture(GL_TEXTURE0);
@@ -557,7 +558,8 @@ float dbg_component(Cpu& c, const ArrayDbg& d, uint32_t i, int k) {
     }
 }
 void trace_geometry(Cpu& c, GLint first, GLsizei n, GLenum itype, uint32_t iptr, GLuint tex) {
-    if (!frame_tracing() || is_perspective(g_proj.back()) || g_dbg_vtx.buf || !g_dbg_vtx.ptr || n <= 0) return;
+    if (!frame_tracing() || g_dbg_vtx.buf || !g_dbg_vtx.ptr || n <= 0) return;
+    if (is_perspective(g_proj.back()) && !g_blend) return;  // 2D draws and blended 3D draws (glows)
     float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f, u0 = 1e9f, u1 = -1e9f, v0 = 1e9f, v1 = -1e9f;
     const bool uv = g_dbg_tc.ptr && !g_dbg_tc.buf;
     for (GLsizei j = 0; j < n; ++j) {
@@ -612,6 +614,36 @@ void trace_geometry(Cpu& c, GLint first, GLsizei n, GLenum itype, uint32_t iptr,
         LOG("frame-trace       quad xy %.1f..%.1f x %.1f..%.1f uv %.4f..%.4f x %.4f..%.4f", qx0, qx1, qy0, qy1, qu0, qu1, qv0, qv1);
     }
 }
+// Dynamic lights (post.h): each additive 3D draw on screen is glow sprites from the light-effects
+// atlas (lamps, neon, headlight / taillight / police flares); every quad becomes a light at its
+// centre (eye space, through its own modelview) with a radius from its size. Client arrays only.
+void glow_capture(Cpu& c, GLenum mode, GLint first, GLsizei n, GLenum itype, uint32_t iptr) {
+    if (!on_screen() || !g_blend || g_blend_dst != GL_ONE || !is_world_projection(g_proj.back()) || g_dbg_vtx.buf ||
+        !g_dbg_vtx.ptr || n <= 0)
+        return;
+    post::Scene& s = g_post_scene;
+    const Mat4& mv = g_mv.back();
+    const GLsizei group = mode == GL_TRIANGLES ? 6 : n;
+    for (GLsizei q = 0; q + group <= n && s.light_count < post::Scene::kMaxLights; q += group) {
+        float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+        for (GLsizei j = 0; j < group; ++j) {
+            uint32_t i = uint32_t(first + q + j);
+            if (iptr) i = itype == GL_UNSIGNED_SHORT ? M.r16(iptr + 2 * (q + j)) : itype == GL_UNSIGNED_BYTE ? M.r8(iptr + q + j) : M.r32(iptr + 4 * (q + j));
+            for (int k = 0; k < 3; ++k) {
+                const float v = k < g_dbg_vtx.size ? dbg_component(c, g_dbg_vtx, i, k) : 0.0f;
+                lo[k] = std::min(lo[k], v);
+                hi[k] = std::max(hi[k], v);
+            }
+        }
+        const float o[3] = {(lo[0] + hi[0]) * 0.5f, (lo[1] + hi[1]) * 0.5f, (lo[2] + hi[2]) * 0.5f};
+        const float size = std::max({hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]});
+        float* L = s.lights[s.light_count];
+        for (int k = 0; k < 3; ++k) L[k] = mv.m[k] * o[0] + mv.m[4 + k] * o[1] + mv.m[8 + k] * o[2] + mv.m[12 + k];
+        L[3] = std::clamp(size * 4.0f, 250.0f, 1400.0f);
+        if (L[2] > 1.0f) ++s.light_count;  // in front of the camera
+    }
+}
+
 H(vertex_pointer) {
     GLint s = a.s32(); GLenum t = a.u32(); GLsizei st = a.s32(); uint32_t p = a.u32();
     g_dbg_vtx = {s, t, st, p, g_array_buffer};
@@ -631,6 +663,7 @@ H(draw_arrays) {
     trace_draw(bound_tex0(), n);
     trace_geometry(c, f, n, 0, 0, bound_tex0());
     post_before_draw(bound_tex0());
+    glow_capture(c, m, f, n, 0, 0);
     tint_before_draw();
     fog_before_draw();
     glDrawArrays(m, f, n);
@@ -641,6 +674,7 @@ H(draw_elements) {
     trace_draw(bound_tex0(), n);
     if (!g_element_buffer) trace_geometry(c, 0, n, t, ip, bound_tex0());
     post_before_draw(bound_tex0());
+    if (!g_element_buffer) glow_capture(c, m, 0, n, t, ip);
     tint_before_draw();
     fog_before_draw();
     glDrawElements(m, n, t, array_ptr(c, ip, g_element_buffer));
@@ -1107,6 +1141,7 @@ void vfb_present(int win_w, int win_h, Fit fit, bool linear, int* rx, int* ry, i
     }
     g_post_view_seen = false;
     g_post_scene.view_valid = false;
+    g_post_scene.light_count = 0;
     trace_event("present (end of frame %d)", g_frame);
     ++g_frame;
     // Save the GL state we touch, so the game's (possibly one-time) settings survive.

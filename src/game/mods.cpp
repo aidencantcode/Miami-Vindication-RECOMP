@@ -10,6 +10,7 @@
 
 #include "core/layout.h"
 #include "core/log.h"
+#include "gl/post.h"
 #include "hle/overrides.h"
 #include "rt/runtime.h"
 #include "settings/settings.h"
@@ -500,6 +501,11 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
     g_manual_spread = std::clamp(s.manual_aim_spread, 0.0f, 1.0f);
     rt.hook_function("_ZN6Weapon5shootEP9CharacterN6glitch4core8vector3dIfEES5_b", {[](cpu::Cpu& c) {
         if (g_input_trace) LOG("[trace] f%d Weapon::shoot", g_trace_frame);
+        if (const uint32_t pl = player_obj(c.rt()); pl && c.reg(cpu::R1) == pl + 4 && c.reg(cpu::R2)) {
+            const uint32_t fp = c.reg(cpu::R2);  // the shot's origin (the muzzle), by reference
+            const float x = f32_at(fp), y = f32_at(fp + 4), z = f32_at(fp + 8);
+            if (std::isfinite(x) && std::isfinite(y) && std::isfinite(z)) post::flash(x, y, z);
+        }
         if (!g_pc_aim || g_aim_blend < 0.5f || !g_aim_valid) return false;
         auto& r = c.rt();
         auto& m = r.mem();

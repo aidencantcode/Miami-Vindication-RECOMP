@@ -36,6 +36,8 @@ struct Settings {
     float bloom_radius = 1.0f;              // 0.5..2: glow size
     bool height_fog = true;                 // fog step 2: thicker near the ground and the sea, sun haze
     float height_fog_amount = 1.0f;         // 0..2
+    bool dynamic_lights = true;             // light pools around lamps, neon and car lights (from the game's glow sprites)
+    float dynamic_lights_intensity = 1.0f;  // 0..2
 
     // [controls]
     std::string touch_controls = "auto";    // auto (hide while a pad/keyboard drives) | show | hide

@@ -70,6 +70,8 @@ const std::vector<Field>& fields() {
         F("graphics", "bloom_radius", &Settings::bloom_radius),
         F("graphics", "height_fog", &Settings::height_fog),
         F("graphics", "height_fog_amount", &Settings::height_fog_amount),
+        F("graphics", "dynamic_lights", &Settings::dynamic_lights),
+        F("graphics", "dynamic_lights_intensity", &Settings::dynamic_lights_intensity),
         F("controls", "touch_controls", &Settings::touch_controls),
         F("controls", "mouse_sensitivity", &Settings::mouse_sensitivity),
         F("controls", "invert_camera_y", &Settings::invert_camera_y),

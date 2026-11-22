@@ -35,6 +35,7 @@ namespace {
     X(PFNGLUNIFORM2FPROC, glUniform2f)                                          \
     X(PFNGLUNIFORM3FPROC, glUniform3f)                                          \
     X(PFNGLUNIFORM4FPROC, glUniform4f)                                          \
+    X(PFNGLUNIFORM4FVPROC, glUniform4fv)                                        \
     X(PFNGLUNIFORMMATRIX4FVPROC, glUniformMatrix4fv)                            \
     X(PFNGLACTIVETEXTUREPROC, glActiveTexture)                                  \
     X(PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer)                              \
@@ -164,10 +165,17 @@ uniform vec4 u_ranges;     // split
 uniform vec4 u_nearfar;    // near n, near f, far n, far f
 uniform vec2 u_tan;        // tan(fov/2) x, y
 uniform mat4 u_inv_view;   // eye -> world
+uniform mat4 u_view;       // world -> eye
 uniform vec3 u_fog_color;
 uniform vec3 u_sun_dir;    // world, toward the sun
 uniform float u_sun_warm;  // 0..1: sunrise / sunset
 uniform vec4 u_hf;         // density at the reference height, falloff per unit, reference height, amount
+#define MAX_LIGHTS 24
+uniform int u_light_count;
+uniform vec4 u_lights[MAX_LIGHTS];  // world space centre, radius
+uniform vec4 u_light_cols[MAX_LIGHTS];  // rgb, w = 1: take the colour from the image at the glow instead
+uniform float u_light_int;
+uniform sampler2D u_light_src;      // blurred image: each light's colour is read at its glow
 float eye_z(float d) {
     float split = u_ranges.x;
     float n, f, ndc;
@@ -179,10 +187,39 @@ float eye_z(float d) {
 void main() {
     vec3 c = texture(u_scene, v_uv).rgb;
     float fog = 0.0;
+    float d = texture(u_depth, v_uv).r;
+    bool sky = d >= 0.99999;
+    float z = sky ? 200000.0 : eye_z(d);   // the sky: a far point along the ray
+    vec3 eye = vec3((v_uv.x * 2.0 - 1.0) * u_tan.x * z, (v_uv.y * 2.0 - 1.0) * u_tan.y * z, z);
+    // Dynamic lights: pools of coloured light around the game's glows (lamps, neon, car lights), in
+    // world space with the height difference counted at 45%, so a lamp up on its pole still lights
+    // the street below. Each light's colour is read from the blurred image at its glow.
+    if (u_light_count > 0 && !sky) {
+        vec3 wp = (u_inv_view * vec4(eye, 1.0)).xyz;
+        vec3 acc = vec3(0.0);
+        for (int i = 0; i < MAX_LIGHTS; ++i) {
+            if (i >= u_light_count) break;
+            vec4 L = u_lights[i];
+            vec3 dv = wp - L.xyz;
+            dv.z *= 0.45;
+            float q = dot(dv, dv) / (L.w * L.w);
+            if (q < 1.0) {
+                // fades in away from the centre: the lamp head / the car itself is not lit by its own glow
+                float a = (1.0 - q) * (1.0 - q) * smoothstep(0.02, 0.2, q);
+                vec3 lc = u_light_cols[i].rgb;
+                if (u_light_cols[i].w > 0.5) {
+                    vec3 le = (u_view * vec4(L.xyz, 1.0)).xyz;  // back to eye space for its screen position
+                    vec2 luv = clamp(vec2(le.x / (le.z * u_tan.x), le.y / (le.z * u_tan.y)) * 0.5 + 0.5, 0.0, 1.0);
+                    lc = texture(u_light_src, luv).rgb;
+                    lc /= max(max(lc.r, max(lc.g, lc.b)), 0.08);
+                }
+                acc += lc * a;
+            }
+        }
+        acc = min(acc, vec3(1.5));
+        c += (c * 1.0 + 0.015) * acc * u_light_int;
+    }
     if (u_fog_on > 0.5) {
-        float d = texture(u_depth, v_uv).r;
-        float z = d >= 0.99999 ? 200000.0 : eye_z(d);   // the sky: a far point along the ray
-        vec3 eye = vec3((v_uv.x * 2.0 - 1.0) * u_tan.x * z, (v_uv.y * 2.0 - 1.0) * u_tan.y * z, z);
         vec3 cam = (u_inv_view * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
         vec3 world = (u_inv_view * vec4(eye, 1.0)).xyz;
         vec3 ray = world - cam;
@@ -375,6 +412,11 @@ constexpr float kFogFalloff = 1.0f / 1500.0f;   // density halves every ~10 m of
 constexpr float kFogDensity = 1.2e-5f;          // ~30% extra haze over 300 m at the reference height
 constexpr float kFogRefBelowCamera = 400.0f;    // reference height: ~4 m below the camera (the street)
 
+// Muzzle flashes (world space), added by the game hooks for the player's shots.
+struct Flash { float p[3]; Uint32 t; };
+Flash g_flashes[4] = {};
+int g_flash_next = 0;
+
 // How dark the scene is (0 day .. 1 night), from the time-of-day fog colour: lights should glow a
 // lot at night while the bright daytime sky (as bright as a neon tube) should only glow a little.
 float g_night = 0;
@@ -420,6 +462,14 @@ bool init() {
 
 void set_settings(const Settings& s) { g_set = s; }
 
+void flash(float x, float y, float z) {
+    Flash& f = g_flashes[g_flash_next++ % 4];
+    f.p[0] = x;
+    f.p[1] = y;
+    f.p[2] = z;
+    f.t = std::max<Uint32>(1, SDL_GetTicks());
+}
+
 namespace {
 float g_sun_dir[3] = {-0.97f, 0.0f, 0.25f};
 }
@@ -431,7 +481,7 @@ void set_time_of_day(int minute) {
     for (int i = 0; i < 3; ++i) g_sun_dir[i] = d[i] / l;
 }
 
-bool active() { return g_ok && (g_set.test != nullptr || g_set.bloom || g_set.height_fog); }
+bool active() { return g_ok && (g_set.test != nullptr || g_set.bloom || g_set.height_fog || g_set.lights); }
 
 void run(const Scene& sc) {
     if (!active() || sc.w <= 0 || sc.h <= 0) return;
@@ -480,8 +530,11 @@ void run(const Scene& sc) {
         } else {
             const float fog_lum = 0.299f * sc.fog_color[0] + 0.587f * sc.fog_color[1] + 0.114f * sc.fog_color[2];
             g_night = std::clamp((0.5f - fog_lum) / 0.35f, 0.0f, 1.0f);
-            const bool bloom = g_set.bloom && g_set.bloom_intensity > 0 && ensure_bloom_targets(sc.w, sc.h);
-            if (bloom) run_bloom();
+            // the bloom chain also feeds the light colours, so build it whenever either is on
+            const bool want_chain = (g_set.bloom && g_set.bloom_intensity > 0) || (g_set.lights && sc.light_count > 0);
+            const bool chain = want_chain && ensure_bloom_targets(sc.w, sc.h);
+            if (chain) run_bloom();
+            const bool bloom = chain && g_set.bloom && g_set.bloom_intensity > 0;
             // composite into the game's framebuffer
             p_glBindFramebuffer(GL_FRAMEBUFFER, sc.fbo);
             glViewport(0, 0, sc.w, sc.h);
@@ -499,13 +552,70 @@ void run(const Scene& sc) {
             p_glUniform1f(uni(p, "u_bloom_on"), bloom ? 1.0f : 0.0f);
             // ground fog / sun haze
             float inv_view[16];
-            const bool fog = g_set.height_fog && g_set.height_fog_amount > 0 && sc.view_valid && invert4(sc.view, inv_view);
-            p_glUniform1f(uni(p, "u_fog_on"), fog ? 1.0f : 0.0f);
-            if (fog) {
-                p_glUniform4f(uni(p, "u_ranges"), sc.split, 0, 0, 0);
-                p_glUniform4f(uni(p, "u_nearfar"), sc.near_n, sc.near_f, sc.far_n, sc.far_f);
-                p_glUniform2f(uni(p, "u_tan"), sc.tan_half_x, sc.tan_half_y);
+            const bool have_view = sc.view_valid && invert4(sc.view, inv_view);
+            const bool fog = g_set.height_fog && g_set.height_fog_amount > 0 && have_view;
+            if (have_view) {
                 p_glUniformMatrix4fv(uni(p, "u_inv_view"), 1, GL_FALSE, inv_view);
+                p_glUniformMatrix4fv(uni(p, "u_view"), 1, GL_FALSE, sc.view);
+            }
+            p_glUniform1f(uni(p, "u_fog_on"), fog ? 1.0f : 0.0f);
+            p_glUniform4f(uni(p, "u_ranges"), sc.split, 0, 0, 0);
+            p_glUniform4f(uni(p, "u_nearfar"), sc.near_n, sc.near_f, sc.far_n, sc.far_f);
+            p_glUniform2f(uni(p, "u_tan"), sc.tan_half_x, sc.tan_half_y);
+            // Dynamic lights: the nearest glows, skipping near-duplicates (a neon tube is many quads).
+            float sel[24][4], cols[24][4];
+            int nsel = 0;
+            // muzzle flashes first (world space already, fixed colour, ~70 ms)
+            const Uint32 now = SDL_GetTicks();
+            if (g_set.lights && have_view)
+                for (const Flash& f : g_flashes)
+                    if (f.t && now - f.t < 70 && nsel < 4) {
+                        float e[4] = {0, 0, 0, 750.0f};  // stored in world space: converted to eye space for the
+                        for (int i = 0; i < 3; ++i)      // common selection below, then back
+                            e[i] = sc.view[i] * f.p[0] + sc.view[4 + i] * f.p[1] + sc.view[8 + i] * f.p[2] + sc.view[12 + i];
+                        std::memcpy(sel[nsel], e, sizeof e);
+                        const float orange[4] = {1.0f, 0.72f, 0.38f, 0.0f};
+                        std::memcpy(cols[nsel], orange, sizeof orange);
+                        ++nsel;
+                    }
+            if (g_set.lights && g_set.lights_intensity > 0 && sc.light_count > 0 && have_view) {
+                std::vector<int> idx(size_t(sc.light_count));
+                for (int i = 0; i < sc.light_count; ++i) idx[size_t(i)] = i;
+                auto d2 = [&](int i) { const float* L = sc.lights[i]; return L[0] * L[0] + L[1] * L[1] + L[2] * L[2]; };
+                std::sort(idx.begin(), idx.end(), [&](int a, int b) { return d2(a) < d2(b); });
+                for (int i : idx) {
+                    const float* L = sc.lights[i];
+                    bool dup = false;
+                    for (int j = 0; j < nsel && !dup; ++j) {
+                        const float dx = sel[j][0] - L[0], dy = sel[j][1] - L[1], dz = sel[j][2] - L[2];
+                        dup = dx * dx + dy * dy + dz * dz < 150.0f * 150.0f;
+                    }
+                    if (dup) continue;
+                    std::memcpy(sel[nsel], L, sizeof sel[nsel]);
+                    const float from_image[4] = {0, 0, 0, 1};
+                    std::memcpy(cols[nsel], from_image, sizeof from_image);
+                    if (++nsel == 24) break;
+                }
+            }
+            for (int j = 0; j < nsel; ++j) {  // eye -> world (the shader lights in world space)
+                const float e[3] = {sel[j][0], sel[j][1], sel[j][2]};
+                for (int i = 0; i < 3; ++i)
+                    sel[j][i] = inv_view[i] * e[0] + inv_view[4 + i] * e[1] + inv_view[8 + i] * e[2] + inv_view[12 + i];
+            }
+            p_glUniform1i(uni(p, "u_light_count"), nsel);
+            if (nsel) {
+                p_glUniform4fv(uni(p, "u_lights"), nsel, &sel[0][0]);
+                p_glUniform4fv(uni(p, "u_light_cols"), nsel, &cols[0][0]);
+            }
+            p_glUniform1f(uni(p, "u_light_int"), std::clamp(g_set.lights_intensity, 0.0f, 2.0f) * (0.3f + 0.7f * g_night));
+            p_glActiveTexture(GL_TEXTURE3);
+            glBindTexture(GL_TEXTURE_2D, bloom && g_level_count > 1 ? g_levels[1].color : g_scene.color);
+            p_glActiveTexture(GL_TEXTURE0);
+            p_glUniform1i(uni(p, "u_light_src"), 3);
+            static int logged_lights = 0;
+            if (sc.light_count && logged_lights++ % 1000 == 0)
+                LOG("post: %d glow lights this frame, %d used", sc.light_count, nsel);
+            if (fog) {
                 p_glUniform3f(uni(p, "u_fog_color"), sc.fog_color[0], sc.fog_color[1], sc.fog_color[2]);
                 const float* sun = g_sun_dir;  // from the game clock (set_time_of_day)
                 p_glUniform3f(uni(p, "u_sun_dir"), sun[0], sun[1], sun[2]);

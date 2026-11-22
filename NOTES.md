@@ -1120,6 +1120,22 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
 - Debug: `GANGSTAR_POST_TEST=invert` (3D scene inverted, HUD untouched: verified) and `=depth`
   (eye distance reconstructed from depth, both ranges: verified continuous).
 
+### 5C.6 Dynamic lights (done 2026-11-22, Q9)
+- The game draws every light it shows as additive sprites from one light-effects atlas (texture 92 in
+  this session, 512²: neon tubes, coloured glows, star flares, headlight / taillight / police
+  flares, a headlight beam), batched in world space with client arrays. The bridge turns each
+  additive 3D quad on screen into a light (`glow_capture`: centre through its modelview into eye
+  space, radius 4 × its size, 250..1400); a night frame at the spawn had 256 (the cap).
+- Composite pass: the 24 nearest (near-duplicates within 1.5 m merged: a neon tube is many quads)
+  converted to world space; per pixel a smooth falloff with the height difference counted at 45%
+  (lamps on poles light the street), zero right at the centre (a car is not lit by its own flares),
+  colour read from the blurred image at the light's glow (so a taillight is red, neon blue). Added as
+  `c += (c + 0.015) × light × intensity`, capped; 30% by day, 100% at night. Muzzle flashes: the
+  player's `Weapon::shoot` adds a 70 ms orange light at the muzzle (`post::flash`).
+- Settings `[graphics] dynamic_lights`, `dynamic_lights_intensity`. Checked at 23:30 (neon on the
+  facades, pools under lamps and ahead of headlights, muzzle flash lighting the player and street)
+  and 12:00 (no visible change).
+
 ### 5C.4 step 2 Ground fog and sun haze (done 2026-11-22, Q8)
 - In the composite pass: world position from depth (both depth ranges, tan(fov/2), inverse of the
   camera view taken from the first city batch, which is in world space: checked, the recovered camera
