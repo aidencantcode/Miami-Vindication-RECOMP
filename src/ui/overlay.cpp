@@ -246,8 +246,13 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
             ch |= combo_str("Fog", &s.fog,
                             {{"atmospheric", "Atmospheric (haze by distance, hides the horizon)"},
                              {"game", "Game (thin, only on the far city)"}});
-            if (s.fog == "atmospheric")
+            if (s.fog == "atmospheric") {
                 ch |= ImGui::SliderFloat("Fog strength", &s.fog_strength, 0.0f, 2.0f, "%.2f");
+                ch |= ImGui::Checkbox("Sky fades into the fog", &s.sky_haze);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The sky near the horizon takes the fog colour, so the fogged far city\n"
+                                      "and the sky meet instead of the city standing out as a grey band.");
+            }
             ch |= ImGui::Checkbox("Ground fog and sun haze", &s.height_fog);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Extra haze close to the ground and over the sea, and a warm glow toward\n"

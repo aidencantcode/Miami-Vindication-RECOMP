@@ -65,6 +65,7 @@ const std::vector<Field>& fields() {
         F("graphics", "night_people_lift", &Settings::night_people_lift),
         F("graphics", "fog", &Settings::fog),
         F("graphics", "fog_strength", &Settings::fog_strength),
+        F("graphics", "sky_haze", &Settings::sky_haze),
         F("graphics", "bloom", &Settings::bloom),
         F("graphics", "bloom_intensity", &Settings::bloom_intensity),
         F("graphics", "bloom_threshold", &Settings::bloom_threshold),

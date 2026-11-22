@@ -18,6 +18,7 @@ struct Settings {
     float bloom_radius = 1.0f;      // 0.5..2: blur size
     bool height_fog = true;         // fog step 2: thicker near the ground / sea, sun haze (needs depth)
     float height_fog_amount = 1.0f; // 0..2
+    bool sky_haze = true;           // the sky near the horizon fades into the fog colour (atmospheric fog)
     bool lights = true;             // dynamic lights from the game's glow sprites (light pools)
     float lights_intensity = 1.0f;  // 0..2
     const char* test = nullptr;     // debugging (GANGSTAR_POST_TEST): "invert" | "depth"

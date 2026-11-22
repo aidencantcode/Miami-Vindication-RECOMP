@@ -981,6 +981,17 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   window keeps two frames: in a 25 s drive the radio starts once (2 playRadio, was ~15/s) and
   streams end only at EOF. `GANGSTAR_AUDIO_TRACE=1` also logs `isMediaPlaying` answers of "no"
   and why a stream ended.
+- **Fog on the sea, sky vs far city: fixed.** Frame trace: the sea (texture 20, "water") is drawn
+  alpha-blended in both depth ranges and never fogged by the game; the bridge's forced fog skipped
+  every blended draw, so the sea stayed clear while the city behind it faded. Forced fog now covers
+  blended draws too, except additive ones (glows) and the sky dome (far depth range with its own
+  near plane 50). The atmospheric fog takes the far city to ~100% fog colour at its end while the
+  sky stayed clear, so distant towers stood out as a grey band. New `[graphics] sky_haze` (default
+  on, atmospheric fog only): in the composite, pixels past 97% of the far city's end (the sky dome
+  reads as ~the far plane: `GANGSTAR_POST_TEST=sky` paints them) blend toward the fog colour (warm
+  toward the sun at sunrise / sunset) by `pow(1 - smoothstep(-0.05, h, ray z), 1.2)` × min(0.92, fog
+  at the far end), h = 0.18 + 0.18 × that fog (≈ 20° at full fog: the far skyline's height).
+  Checked at 06:30 and 18:30 (the sky behind the far towers takes their colour).
 
 ### 5A.1 Sprint forward/back (fixed 2026-11-22)
 - `AnalogStick::processTouch` (decomp_input.c): drag in screen pixels → 480×320 units as

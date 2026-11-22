@@ -87,7 +87,14 @@ float eye_z(float d) {
 void main() {
     vec3 c = texture(u_scene, v_uv).rgb;
     if (u_mode == 1) { o_color = vec4(1.0 - c, 1.0); return; }
-    float z = eye_z(texture(u_depth, v_uv).r);
+    float d = texture(u_depth, v_uv).r;
+    float z = eye_z(d);
+    if (u_mode == 3) {  // what the composite treats as sky: magenta (cleared depth) / cyan (past the far city)
+        if (d >= 0.99999) o_color = vec4(1.0, 0.0, 1.0, 1.0);
+        else if (d > u_ranges.x && z > u_nearfar.w * 0.97) o_color = vec4(0.0, 1.0, 1.0, 1.0);
+        else o_color = vec4(c * 0.5, 1.0);
+        return;
+    }
     o_color = vec4(vec3(clamp(log2(max(z, 1.0)) / 17.0, 0.0, 1.0)), 1.0);
 }
 )";
@@ -173,6 +180,7 @@ uniform vec3 u_fog_color;
 uniform vec3 u_sun_dir;    // world, toward the sun
 uniform float u_sun_warm;  // 0..1: sunrise / sunset
 uniform vec4 u_hf;         // density at the reference height, falloff per unit, reference height, amount
+uniform vec2 u_sky_haze;   // fog colour amount at the horizon, height (ray z, ~sin of the elevation) where it fades out
 #define MAX_LIGHTS 24
 uniform int u_light_count;
 uniform vec4 u_lights[MAX_LIGHTS];  // world space centre, radius
@@ -222,12 +230,19 @@ void main() {
         acc = min(acc, vec3(1.5));
         c += (c * 1.0 + 0.015) * acc * u_light_int;
     }
+    vec3 cam = (u_inv_view * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    vec3 world = (u_inv_view * vec4(eye, 1.0)).xyz;
+    vec3 ray = world - cam;
+    float dist = length(ray);
+    vec3 dir = ray / max(dist, 1e-3);
+    float sun = pow(max(dot(dir, u_sun_dir), 0.0), 8.0) * u_sun_warm;
+    vec3 haze_col = mix(u_fog_color, vec3(1.0, 0.62, 0.32), clamp(sun, 0.0, 1.0) * 0.8);
+    // Sky haze: past the far city's end (the sky dome; its depth reads as ~the far plane) the horizon
+    // takes the fog colour the far city fades into, so the two meet instead of the fogged city
+    // standing out against a clear sky.
+    if (u_sky_haze.x > 0.0 && (sky || (d > u_ranges.x && z > u_nearfar.w * 0.97)))
+        c = mix(c, haze_col, pow(1.0 - smoothstep(-0.05, u_sky_haze.y, dir.z), 1.2) * u_sky_haze.x);
     if (u_fog_on > 0.5) {
-        vec3 cam = (u_inv_view * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
-        vec3 world = (u_inv_view * vec4(eye, 1.0)).xyz;
-        vec3 ray = world - cam;
-        float dist = length(ray);
-        vec3 dir = ray / max(dist, 1e-3);
         // Exponential height fog integrated along the ray: density(h) = a * exp(-b (h - h0)).
         float a = u_hf.x, b = u_hf.y;
         float dz = dir.z * b;
@@ -235,10 +250,7 @@ void main() {
         float depth_amount = a * exp(-b * (cam.z - u_hf.z)) * along;
         fog = clamp(1.0 - exp(-depth_amount), 0.0, 0.85) * u_hf.w;
         fog = clamp(fog, 0.0, 0.9);
-        float sun = pow(max(dot(dir, u_sun_dir), 0.0), 8.0) * u_sun_warm;
-        vec3 sun_col = vec3(1.0, 0.62, 0.32);
-        vec3 col = mix(u_fog_color, sun_col, clamp(sun, 0.0, 1.0) * 0.8);
-        c = mix(c, col, fog);
+        c = mix(c, haze_col, fog);
     }
     vec3 b = texture(u_bloom, v_uv).rgb * u_bloom_on;
     c += b * u_bloom_intensity * (1.0 + 1.5 * fog);
@@ -468,7 +480,7 @@ void set_time_of_day(int minute) {
     for (int i = 0; i < 3; ++i) g_sun_dir[i] = d[i] / l;
 }
 
-bool active() { return g_ok && (g_set.test != nullptr || g_set.bloom || g_set.height_fog || g_set.lights); }
+bool active() { return g_ok && (g_set.test != nullptr || g_set.bloom || g_set.height_fog || g_set.lights || g_set.sky_haze); }
 
 // The state GLES 3 has that the passes change, saved and restored by hand (the shader renderer and
 // Android: no attribute stacks there).
@@ -560,7 +572,7 @@ void run(const Scene& sc, bool fixed_function) {
             glBindTexture(GL_TEXTURE_2D, g_scene.color);
             p_glUniform1i(uni(g_test_prog, "u_scene"), 0);
             p_glUniform1i(uni(g_test_prog, "u_depth"), 1);
-            p_glUniform1i(uni(g_test_prog, "u_mode"), std::strcmp(g_set.test, "invert") == 0 ? 1 : 2);
+            p_glUniform1i(uni(g_test_prog, "u_mode"), !std::strcmp(g_set.test, "invert") ? 1 : !std::strcmp(g_set.test, "sky") ? 3 : 2);
             p_glUniform4f(uni(g_test_prog, "u_ranges"), sc.split, 0, 0, 0);
             p_glUniform4f(uni(g_test_prog, "u_nearfar"), sc.near_n, sc.near_f, sc.far_n, sc.far_f);
             draw_fullscreen();
@@ -655,13 +667,20 @@ void run(const Scene& sc, bool fixed_function) {
             static int logged_lights = 0;
             if (sc.light_count && logged_lights++ % 1000 == 0)
                 LOG("post: %d glow lights this frame, %d used", sc.light_count, nsel);
+            p_glUniform3f(uni(p, "u_fog_color"), sc.fog_color[0], sc.fog_color[1], sc.fog_color[2]);
+            const float* sun = g_sun_dir;  // from the game clock (set_time_of_day)
+            p_glUniform3f(uni(p, "u_sun_dir"), sun[0], sun[1], sun[2]);
+            // warm haze only when the time-of-day colour is warm (sunrise / sunset)
+            const float warm = std::clamp((sc.fog_color[0] - sc.fog_color[2]) * 4.0f, 0.0f, 1.0f);
+            p_glUniform1f(uni(p, "u_sun_warm"), warm);
+            // sky haze: as much fog colour at the horizon as the far city gets at its end (EXP2)
+            {
+                const float k = sc.fog_density * sc.far_f;
+                const float far_fog = sc.fog_density > 0 ? 1.0f - std::exp(-k * k) : 0.0f;
+                p_glUniform2f(uni(p, "u_sky_haze"), g_set.sky_haze && have_view ? std::min(0.92f, far_fog) : 0.0f,
+                              0.18f + 0.18f * far_fog);  // up to ~20 degrees: the far skyline's height
+            }
             if (fog) {
-                p_glUniform3f(uni(p, "u_fog_color"), sc.fog_color[0], sc.fog_color[1], sc.fog_color[2]);
-                const float* sun = g_sun_dir;  // from the game clock (set_time_of_day)
-                p_glUniform3f(uni(p, "u_sun_dir"), sun[0], sun[1], sun[2]);
-                // warm haze only when the time-of-day colour is warm (sunrise / sunset)
-                const float warm = std::clamp((sc.fog_color[0] - sc.fog_color[2]) * 4.0f, 0.0f, 1.0f);
-                p_glUniform1f(uni(p, "u_sun_warm"), warm);
                 p_glUniform4f(uni(p, "u_hf"), kFogDensity, kFogFalloff, g_player[2] + kFogRefAboveGround,
                               std::clamp(g_set.height_fog_amount, 0.0f, 2.0f));
                 static int logged = 0;
