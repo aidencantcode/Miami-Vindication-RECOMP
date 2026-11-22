@@ -1029,6 +1029,77 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   the factor is ~0 (no cost by day). Checked at 12:00 (crisp, vs washed out with bloom always on),
   18:00 (mild) and 23:30 (full).
 
+### Owner feedback round 3 (2026-11-23)
+Owner: lights flicker / pop and depend on the view angle (blue light over a rooftop in one view,
+not in the next), fog vanishes and returns when looking up / down, fog and ground fog cover the sea
+(no reflections), muzzle flash too bright, tearing with vsync on, fog a boring flat colour: wants a
+gradient (Vice City / GTA VI colours) by time of day, very little by day, heavy and colourful at
+sunrise / sunset, moderate at night; sunrise / sunset too desaturated. Owner's settings: renderer gl,
+MSAA 8, fog_strength 0.05 (distance fog nearly off), height_fog_amount 2, headlights 0.
+- **Root cause of the unstable fog and lights: the wrong camera.** The screen effects took the view
+  matrix from the first "city" draw of the frame (a world texture, or normals without colours). The
+  frame trace shows the first near-range draws are often people / props (textures 105/106/100,
+  normals, no colour array) with their own model matrix, and some world-texture draws (22, 101) are
+  model-space too. In those frames the reconstructed camera was elsewhere: the ground fog switched
+  off ("camera > 50 m from the player"), city lamps counted as car lights (their modelview no longer
+  matched the "view") and became beams from odd places, and remembered lamps were stored at wrong
+  positions. Now the view comes from the engine: `CFixedGLDriver<COpenGLESDriver>::setTransform`
+  (decompiled: state 0 view, 1 world, 2 projection; 16 floats + a flag byte) hooked in mods.cpp,
+  added to codegen's HOOKABLE (recomp only checks hooks in listed functions).
+  `glitch::scene::CCameraSceneNode::render` (sets 2 from +0x270, 0 from +0x1e8) is never called.
+  `GANGSTAR_CAM_TRACE=1` logs setTransform calls and draws whose modelview differs from the camera.
+- **Game clock:** DayTime +8 is a 64-bit ms count that keeps running past midnight (UpdateInfo takes
+  it modulo the day; day = 1440 min: dawn 03:00+4 h, day 07:00+8 h, dusk 15:00+4 h, night 19:00+8 h).
+  We read only the low word / 60000, so after the first game day the sun direction was stuck west
+  (the owner's log: sun -0.99 0.11 0.12 all session). Now (64-bit / 60000) % 1440.
+- **Vsync:** adaptive vsync (swap interval -1) tears on a late frame, which the owner saw at 100 Hz.
+  Classic vsync again; `[display] vsync_adaptive` (default off) opts in.
+- **Atmosphere (post.cpp):** two stages. The atmosphere (dynamic lights, fog, the sky's horizon) runs
+  at the first additive world draw (the first glow; frame trace: after it only blended decals and
+  glows, no solid geometry), so glows are not fogged by what is behind them; the finish (bloom,
+  colour grade) at the end of the scene. Frames without glows do both at the end in one pass. The GL
+  fog is off for the scene (screen mode); draws after the atmosphere stage get EXP2 by eye distance
+  matching the haze at half the far end (`post::late_fog()`), glows toward black.
+  - Fog = haze by distance `1 - exp(-3.5 a (d / far_end)^1.5)` (far_end = the far city's far plane,
+    133,800 at ultra / 2.23) + exponential ground fog about z = 250 (street level ~200 on Ocean Drive,
+    sea level 0), both × the time-of-day amount a = mix of `fog_day` 0.15 / `fog_golden` 1 /
+    `fog_night` 0.45 by palette key. Colour = gradient by the view ray: horizon colour low, upper
+    colour from ray z 0.3, the sun side's colour by azimuth (pow 3). The sky past the far end gets the
+    same colour near the horizon.
+  - Palette keys (`kAtmo`, game hours from a calibration run on the beach with our effects off: the
+    game's sunrise peaks 05:00-05:30, day from 06:30, golden 16:00-17:30, sunset 18:00-18:40 going
+    purple, night from 19:00): 03:30 night, 04:30 pre-dawn violet, 05:15 peach / lavender / gold,
+    06:15 cream-gold, 07:30-15:30 pale yellow horizon under light blue, 16:30 gold, 17:15 amber,
+    18:00 coral / violet / hot orange, 18:40 magenta-purple, 19:15 blue hour, 20:30 night indigo.
+    `fog_colors = game` uses the game's flat fog colour instead.
+  - Colour grade per key (finish): saturation (1.0 night, 1.08 day, 1.3-1.35 sunrise / sunset) and
+    shadow / highlight multipliers (violet shade, warm light), scaled by `sunset_colour` (0..2).
+  - Sun direction: rises 05:00 east (+x), sets 18:45 west.
+- **The sea:** drawn blended with no depth, so the depth under it is the sea bed or the far plane
+  (`GANGSTAR_POST_TEST=sky`: all cyan) and the ground fog saw "deep below the street": the sea turned
+  into a flat white / grey sheet. Its textures (`water`, `water_lo`, `swamp_water`, `sea_foam_00`,
+  recognised by content in night_textures) now mark stencil bit 0x80 on their draws (cleared with
+  the depth each frame; the game never enables the stencil test, logged if it does), and the draw
+  records the sea's height (a vertex through modelview and the inverse camera: 0). The atmosphere
+  stage draws twice split by that bit; sea pixels measure the fog to the sea plane along the ray,
+  get `water_fog` (0.35) of it and no light pools. The foam strip along the shore was a separate
+  texture over the far plane: it read as sky and showed an orange band until counted as sea.
+- **Lights:** glows are converted to world space when drawn (engine camera); the atmosphere stage
+  uses the glows recorded since the previous one (it runs before this frame's are drawn). Only the
+  light-effects atlas (most-voted glow texture, decaying votes) makes lights: mission markers, muzzle
+  flash sprites and explosions no longer become beams. Car lights not drawn are kept 0.3 s in view /
+  1.5 s off screen (the game culls the car) and move on at their smoothed speed; lamps fade in over
+  0.4 s and out over 0.5 s. Muzzle flash light: `muzzle_flash` 0.35 × (0.25 + 0.75 × night), 5.5 m,
+  60 ms (was 1.0, 7.5 m, by day too: the light multiplies the scene, so a sunlit street doubled).
+- **Checks:** beach at 6 times (sea keeps colour and reflections), Ocean Drive at 7 times, camera
+  pitched down / up at 18:15 (fog the same), night still-camera flicker test (frame-to-frame
+  differences only on moving cars / people), light-only view while turning (neon, lamp pools, beams
+  steady), shader renderer, GLSL ES check. Cost: ~300 fps uncapped with everything on vs ~300 off
+  (1280x720, MSAA 8, ultra, night).
+- **Open:** the owner's rooftop scene (images 4/5) was not visited; the mission marker no longer
+  makes light, helipad flares (atlas sprites on a model) do (point lights, held when culled). MSAA
+  edges against the sky take one sample's fog (screen pass): watch for outlines on silhouettes.
+
 ### 5A.1 Sprint forward/back (fixed 2026-11-22)
 - `AnalogStick::processTouch` (decomp_input.c): drag in screen pixels → 480×320 units as
   dx / sy and dy / sx with sx = w/480, sy = h/320 (**swapped**; harmless on a 480×320 phone), then

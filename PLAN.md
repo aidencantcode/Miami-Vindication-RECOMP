@@ -335,6 +335,16 @@ stream decoder), ✅ adaptive vsync, ✅ fog on the sea and sky haze, ✅ dynami
 aim won't fire" not reproduced; a diagnostic line is logged when fire is held 1.5 s without a shot:
 needs the owner's runtime.log from when it happens.
 
+**Owner feedback round 3 (2026-11-23, NOTES "Owner feedback round 3"):** ✅ lights popping /
+flickering / changing with the view angle and fog vanishing when looking up / down (one cause: the
+screen effects guessed the camera from a draw that was often a person or prop; now the engine's
+camera via the driver's setTransform), ✅ game clock past midnight (sun was stuck), ✅ tearing
+(classic vsync again, adaptive opt-in), ✅ fog as a Miami palette gradient by time of day (thin by
+day, heavy at sunrise / sunset, moderate at night; three amount sliders), ✅ the sea keeps its look
+(stencil-marked, fog to the sea plane, own share), ✅ sunrise / sunset colour grade, ✅ muzzle flash
+light toned down (+ setting), ✅ steadier car lights and lamp fades. Waiting on the owner's look at
+it in game (the rooftop scene of their images 4/5 was not visited).
+
 ## ⏸ Phase 5: fixes from play-testing, then the Android port (planned 2026-11-20; owner says when to start)
 
 **Owner's play-test list (2026-11-20).** Each item gets its own commit and a pass/fail check.
