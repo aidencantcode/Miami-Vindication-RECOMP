@@ -26,6 +26,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <signal.h>
 #endif
 
 namespace {
@@ -233,6 +235,19 @@ DWORD WINAPI sampler_thread(void* param) {
     }
     return 0;
 }
+#else
+// POSIX crash report: the faulting address as a guest address (recompiled code touches guest memory
+// directly), then the default action (SA_RESETHAND re-raises it). Logging is not async-signal-safe;
+// acceptable for a process that is about to die.
+void on_fault(int sig, siginfo_t* si, void*) {
+    const uintptr_t a = reinterpret_cast<uintptr_t>(si->si_addr), base = reinterpret_cast<uintptr_t>(g_state.mem);
+    if (a >= base && a - base < (uintptr_t(1) << 32))
+        LOG("recomp: host signal %d: guest access at %08x (%s)", sig, unsigned(a - base),
+            a - base >= layout::kHandleBase && a - base < layout::kTrapBase ? "a Java object handle" : "bad guest pointer");
+    else
+        LOG("recomp: host signal %d at host address %p", sig, si->si_addr);
+    core::log_close();
+}
 #endif
 
 }  // namespace
@@ -346,6 +361,14 @@ bool bind(rt::Runtime& rt, cpu::Cpu& c, std::string* err) {
         CloseHandle(CreateThread(nullptr, 0, &sampler_thread, reinterpret_cast<void*>(ms), 0, nullptr));
         LOG("recomp: stack sampler armed (%s s)", env);
     }
+#else
+    // POSIX (Android): a crash names the faulting guest address before the process dies.
+    struct sigaction sa {};
+    sa.sa_sigaction = &on_fault;
+    sa.sa_flags = SA_SIGINFO | SA_RESETHAND;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, nullptr);
+    sigaction(SIGBUS, &sa, nullptr);
 #endif
     LOG("recomp: %u functions bound, %u imports (%d without a trap: data imports)", rc_fn_count, rc_import_count,
         missing);

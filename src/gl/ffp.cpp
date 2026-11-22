@@ -1,7 +1,7 @@
 #include "gl/ffp.h"
 
 #include <SDL.h>
-#include <SDL_opengl_glext.h>
+#include "gl/glapi.h"
 
 #include <algorithm>
 #include <cstring>
@@ -31,6 +31,7 @@ namespace {
     X(PFNGLUSEPROGRAMPROC, glUseProgram)                                        \
     X(PFNGLGETUNIFORMLOCATIONPROC, glGetUniformLocation)                        \
     X(PFNGLUNIFORM1IPROC, glUniform1i)                                          \
+    X(PFNGLUNIFORM2IPROC, glUniform2i)                                          \
     X(PFNGLUNIFORM1FPROC, glUniform1f)                                          \
     X(PFNGLUNIFORM3FPROC, glUniform3f)                                          \
     X(PFNGLUNIFORM4FPROC, glUniform4f)                                          \
@@ -413,8 +414,6 @@ void upload(const DrawState& s, GLenum mode) {
     if (g.point_size != C.psize) p_glUniform1f(L.psize, C.psize = g.point_size);
 }
 
-typedef void(APIENTRY* PFN_UNIFORM2I)(GLint, GLint, GLint);
-PFN_UNIFORM2I p_glUniform2i = nullptr;
 
 // The ivec2 switches (fog mode / radial, alpha test function, clip planes), cached like the rest.
 void upload_ivecs() {
@@ -468,13 +467,10 @@ void setup(GLenum mode, const DrawState& s) {
 
 bool init() {
     bool ok = true;
-#define LOAD(type, name)                                                         \
-    p_##name = reinterpret_cast<type>(SDL_GL_GetProcAddress(#name));            \
-    if (!p_##name) { LOG("ffp: missing GL entry point %s", #name); ok = false; }
+#define LOAD(type, name) GLAPI_LOAD(type, name, ok)
     FFP_GL_FUNCS(LOAD)
 #undef LOAD
-    p_glUniform2i = reinterpret_cast<PFN_UNIFORM2I>(SDL_GL_GetProcAddress("glUniform2i"));
-    if (!ok || !p_glUniform2i) return false;
+    if (!ok) return false;
     const GLuint vs = compile(GL_VERTEX_SHADER, kVS), fs = compile(GL_FRAGMENT_SHADER, kFS);
     if (!vs || !fs) return false;
     g_prog = p_glCreateProgram();

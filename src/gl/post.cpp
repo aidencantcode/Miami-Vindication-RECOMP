@@ -1,7 +1,7 @@
 #include "gl/post.h"
 
 #include <SDL.h>
-#include <SDL_opengl_glext.h>
+#include "gl/glapi.h"
 
 #include <algorithm>
 #include <cmath>
@@ -424,9 +424,7 @@ void run_bloom() {
 
 bool init() {
     bool ok = true;
-#define LOAD(type, name)                                                         \
-    p_##name = reinterpret_cast<type>(SDL_GL_GetProcAddress(#name));            \
-    if (!p_##name) { LOG("post: missing GL entry point %s", #name); ok = false; }
+#define LOAD(type, name) GLAPI_LOAD(type, name, ok)
     POST_GL_FUNCS(LOAD)
 #undef LOAD
     if (!ok) return false;

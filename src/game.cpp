@@ -14,7 +14,7 @@
 // out correctly for any width at 480 high; taller sizes break its UI). It renders into a
 // virtual framebuffer at N x that size (gles1::vfb_*), which is scaled into the window.
 #include <SDL.h>
-#include <SDL_opengl.h>
+#include "gl/glapi.h"
 
 #include <algorithm>
 #include <chrono>

@@ -1,6 +1,10 @@
 #include "cpu/cpu.h"
 
+// GANGSTAR_NO_UNICORN: builds with only the recompiled backend (Android); the Unicorn emulator
+// (the reference / debugging backend on Windows) is left out.
+#ifndef GANGSTAR_NO_UNICORN
 #include <unicorn/unicorn.h>
+#endif
 
 #include <cstdio>
 #include <cstdlib>
@@ -17,6 +21,7 @@
 
 namespace cpu {
 
+#ifndef GANGSTAR_NO_UNICORN
 namespace {
 
 const int kUcReg[] = {UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2,  UC_ARM_REG_R3, UC_ARM_REG_R4, UC_ARM_REG_R5,
@@ -31,6 +36,7 @@ void check_uc(uc_err e, const char* what) {
 thread_local std::exception_ptr t_pending;  // handler exception, re-thrown after uc_emu_start
 
 }  // namespace
+#endif
 
 // ---------------------------------------------------------------------------- Args
 Args::Args(Cpu& c, uint32_t ncrn) : cpu_(c), ncrn_(ncrn) {
@@ -82,6 +88,11 @@ double Args::f64() {
 
 // ----------------------------------------------------------------------------- Cpu
 Cpu::Cpu(rt::Runtime& rt, uint32_t stack_top, const char* name) : rt_(rt), name_(name), stack_top_(stack_top) {
+#ifdef GANGSTAR_NO_UNICORN
+    LOG("cpu %s: recompiled code only (no emulator in this build)", name);
+}
+Cpu::~Cpu() = default;
+#else
     check_uc(uc_open(UC_ARCH_ARM, UC_MODE_ARM, &uc_), "uc_open");
     // Cortex-A15 (ARMv7-A + VFPv4 + hardware divide). The game is ARMv5TE code, which ARMv7 runs
     // unchanged; the phone itself (Tegra 2) was a Cortex-A9, so ARMv7 behaviour (e.g. unaligned
@@ -114,12 +125,17 @@ Cpu::Cpu(rt::Runtime& rt, uint32_t stack_top, const char* name) : rt_(rt), name_
 Cpu::~Cpu() {
     if (uc_) uc_close(uc_);
 }
+#endif
 
 uint32_t Cpu::reg(Reg r) const {
     if (rc_) return r <= LR ? rc_->r[r] : r == CPSR ? 0x30u : 0u;  // recompiled: no PC, Thumb mode
+#ifdef GANGSTAR_NO_UNICORN
+    return 0;
+#else
     uint32_t v = 0;
     uc_reg_read(uc_, kUcReg[r], &v);
     return v;
+#endif
 }
 
 void Cpu::set_reg(Reg r, uint32_t v) {
@@ -128,7 +144,9 @@ void Cpu::set_reg(Reg r, uint32_t v) {
         else if (r == PC) { rc_redirect_ = v; rc_has_redirect_ = true; }  // handled by rc_import
         return;
     }
+#ifndef GANGSTAR_NO_UNICORN
     uc_reg_write(uc_, kUcReg[r], &v);
+#endif
 }
 
 void Cpu::ret_f(float v) {
@@ -143,6 +161,10 @@ void Cpu::ret_d(double v) {
     ret64(b);
 }
 
+#ifdef GANGSTAR_NO_UNICORN
+void Cpu::install_code_hook(uint32_t) {}  // recompiled code checks hooks at function entry itself
+void Cpu::enable_block_profile(std::unordered_map<uint32_t, uint64_t>*) { LOG("block profile: needs the emulator"); }
+#else
 void Cpu::on_intr(uc_struct* uc, uint32_t intno, void* self_) {
     Cpu& self = *static_cast<Cpu*>(self_);
     const uint32_t svc_addr = self.reg(PC) - 4;
@@ -215,6 +237,7 @@ void Cpu::enable_block_profile(std::unordered_map<uint32_t, uint64_t>* counts) {
     // Re-translate everything so blocks compiled before the hook existed are counted too.
     check_uc(uc_ctl_flush_tb(uc_), "flush translation cache");
 }
+#endif
 
 uint64_t Cpu::call(uint32_t addr, std::initializer_list<uint32_t> args, std::initializer_list<uint32_t> stack_args) {
     if (rc_) {  // recompiled backend: a plain C call, registers saved/restored like the Unicorn path
@@ -246,6 +269,10 @@ uint64_t Cpu::call(uint32_t addr, std::initializer_list<uint32_t> args, std::ini
         std::memcpy(rc_->r, saved, sizeof saved);
         return result;
     }
+#ifdef GANGSTAR_NO_UNICORN
+    (void)addr;
+    throw std::runtime_error("guest call before the recompiled backend was bound (no emulator in this build)");
+#else
     const bool nested = depth_ > 0;
     uc_context* ctx = nullptr;
     if (nested) {
@@ -291,6 +318,7 @@ uint64_t Cpu::call(uint32_t addr, std::initializer_list<uint32_t> args, std::ini
         uc_context_free(ctx);
     }
     return result;
+#endif
 }
 
 std::string Cpu::where(uint32_t addr) const {
@@ -319,6 +347,12 @@ std::string Cpu::dump() const {
 
 }  // namespace cpu
 
+#ifdef GANGSTAR_NO_UNICORN
+namespace cpu {
+void Cpu::watch_writes(uint32_t, uint32_t) { LOG("watch: needs the emulator"); }
+void Cpu::flush_translations() {}
+}  // namespace cpu
+#else
 namespace cpu {
 namespace {
 struct WriteWatch { Cpu* cpu; std::set<uint32_t> seen; };
@@ -344,3 +378,4 @@ void Cpu::watch_writes(uint32_t addr, uint32_t size) {
 namespace cpu {
 void Cpu::flush_translations() { check_uc(uc_ctl_flush_tb(uc_), "flush translation cache"); }
 }  // namespace cpu
+#endif

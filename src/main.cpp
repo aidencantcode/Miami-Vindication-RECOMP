@@ -3,7 +3,7 @@
 //   gangstar --selftest-load [path/to/libGangster2.so]   load + relocate + verify (= probe 1a)
 //   gangstar --window [--frames N]                       SDL2 window + GL context check
 #include <SDL.h>
-#include <SDL_opengl.h>
+#include "gl/glapi.h"
 
 #include <cstdlib>
 #include <cstring>

@@ -7,7 +7,7 @@
 //
 // Shaders are written in a GLSL subset that builds as desktop GLSL 3.30 and as GLSL ES 3.00 (the
 // Android GLES 3 backend, Phase 5B): only the #version line and precision statements differ.
-#include <SDL_opengl.h>
+#include "gl/glapi.h"
 
 namespace post {
 

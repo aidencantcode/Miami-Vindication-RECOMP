@@ -10,7 +10,7 @@
 //
 // Not emulated (the game never uses them, checked with traces): lighting (GL_LIGHTING is never
 // enabled; the engine lights on the CPU), flat shading, logic ops, line/point smoothing.
-#include <SDL_opengl.h>
+#include "gl/glapi.h"
 
 #include <cstdint>
 

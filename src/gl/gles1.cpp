@@ -1,8 +1,7 @@
 #include "gl/gles1.h"
 
 #include <SDL.h>
-#include <SDL_opengl.h>
-#include <SDL_opengl_glext.h>
+#include "gl/glapi.h"
 
 #include <algorithm>
 #include <cmath>
@@ -376,8 +375,10 @@ H(clip_planef) {
         ffp::clip_plane(int(p - GL_CLIP_PLANE0), eye);
         return;
     }
+#ifndef GANGSTAR_GLES  // (the GLES build always runs the shader renderer)
     const double d[4] = {e[0], e[1], e[2], e[3]};
     glClipPlane(p, d);
+#endif
 }
 H(get_error) { c.ret(glGetError()); }
 H(get_string) {
@@ -682,6 +683,7 @@ void trace_geometry(Cpu& c, GLint first, GLsizei n, GLenum itype, uint32_t iptr,
     trace_flush();
     LOG("frame-trace     2d n=%d tex %u (%dx%d wrap %#x) xy %.1f..%.1f x %.1f..%.1f mv scale %g %g move %.1f %.1f uv %.3f..%.3f x %.3f..%.3f",
         n, tex, ts.first, ts.second, unsigned(wrap_s), x0, x1, y0, y1, mv.m[0], mv.m[5], mv.m[12], mv.m[13], u0, u1, v0, v1);
+#ifndef GANGSTAR_GLES  // GLES has no texture read-back (debugging aid on desktop only)
     static std::unordered_map<GLuint, bool> dumped;  // save each traced 2D texture once (TGA, next to the log)
     if (tex && !dumped[tex]) {
         dumped[tex] = true;
@@ -702,6 +704,7 @@ void trace_geometry(Cpu& c, GLint first, GLsizei n, GLenum itype, uint32_t iptr,
             }
         }
     }
+#endif
     if (!iptr || n % 6) return;
     for (GLsizei q = 0; q < n; q += 6) {  // indexed quads (two triangles each)
         float qx0 = 1e9f, qx1 = -1e9f, qy0 = 1e9f, qy1 = -1e9f, qu0 = 1e9f, qu1 = -1e9f, qv0 = 1e9f, qv1 = -1e9f;
@@ -1137,14 +1140,17 @@ H(check_framebuffer_status) { c.ret(p_glCheckFramebufferStatus(a.u32())); }
 
 bool load_gl() {
     bool ok = true;
-#define LOAD(type, name)                                                          \
-    p_##name = reinterpret_cast<type>(SDL_GL_GetProcAddress(#name));             \
-    if (!p_##name) { LOG("GL: missing entry point %s", #name); ok = false; }
+#define LOAD(type, name) GLAPI_LOAD(type, name, ok)
     GL_EXT_FUNCS(LOAD)
 #undef LOAD
     if (g_shader && !(ok && ffp::init())) {
+#ifdef GANGSTAR_GLES
+        LOG("GL: the shader renderer failed to start (see above); nothing can be drawn");
+        return false;
+#else
         LOG("GL: shader renderer unavailable, using the fixed-function pipeline");
         g_shader = false;
+#endif
     }
     LOG("GL: renderer: %s", g_shader ? "shaders (GLES 3 style fixed-function emulation)" : "OpenGL fixed function");
     if (ok && !g_shader) tint_init();
@@ -1157,7 +1163,11 @@ bool load_gl() {
     return ok;
 }
 
+#ifdef GANGSTAR_GLES
+void set_shader_renderer(bool) { g_shader = true; }  // GLES 3 has no fixed-function pipeline
+#else
 void set_shader_renderer(bool on) { g_shader = on; }
+#endif
 bool shader_renderer() { return g_shader; }
 
 void set_fog(const FogConfig& f) {

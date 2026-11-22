@@ -1,6 +1,13 @@
 #include "core/guest_memory.h"
 
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <errno.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 #include "core/log.h"
 
@@ -9,14 +16,46 @@ namespace core {
 static constexpr uint64_t kSpace = 1ull << 32;
 static constexpr uint32_t kPage = 0x1000;
 
+// The 4 GB guest space is reserved inaccessible and committed read/write region by region
+// (Windows: VirtualAlloc reserve / commit; POSIX: mmap PROT_NONE, then mprotect).
+namespace {
+#ifdef _WIN32
+uint8_t* reserve_space() { return static_cast<uint8_t*>(VirtualAlloc(nullptr, kSpace, MEM_RESERVE, PAGE_NOACCESS)); }
+void release_space(uint8_t* p) { VirtualFree(p, 0, MEM_RELEASE); }
+bool commit(uint8_t* p, uint32_t size) { return VirtualAlloc(p, size, MEM_COMMIT, PAGE_READWRITE) != nullptr; }
+bool make_rw(uint8_t* p, uint32_t size) {
+    DWORD old = 0;
+    return VirtualProtect(p, size, PAGE_READWRITE, &old) != 0;
+}
+unsigned long last_error() { return GetLastError(); }
+#else
+uint8_t* reserve_space() {
+    void* p = mmap(nullptr, kSpace, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    return p == MAP_FAILED ? nullptr : static_cast<uint8_t*>(p);
+}
+void release_space(uint8_t* p) { munmap(p, kSpace); }
+// Rounded out to the system page size (16 KB on some newer Android devices; guest regions are
+// 4 KB aligned, and neighbouring regions sharing a system page are all read/write anyway).
+bool protect_rw(uint8_t* p, uint32_t size) {
+    static const uintptr_t ps = uintptr_t(sysconf(_SC_PAGESIZE) > 0 ? sysconf(_SC_PAGESIZE) : 4096);
+    const uintptr_t a = reinterpret_cast<uintptr_t>(p) & ~(ps - 1);
+    const uintptr_t e = (reinterpret_cast<uintptr_t>(p) + size + ps - 1) & ~(ps - 1);
+    return mprotect(reinterpret_cast<void*>(a), e - a, PROT_READ | PROT_WRITE) == 0;
+}
+bool commit(uint8_t* p, uint32_t size) { return protect_rw(p, size); }
+bool make_rw(uint8_t* p, uint32_t size) { return protect_rw(p, size); }
+unsigned long last_error() { return unsigned(errno); }
+#endif
+}  // namespace
+
 GuestMemory::~GuestMemory() {
-    if (base_) VirtualFree(base_, 0, MEM_RELEASE);
+    if (base_) release_space(base_);
 }
 
 bool GuestMemory::init() {
-    base_ = static_cast<uint8_t*>(VirtualAlloc(nullptr, kSpace, MEM_RESERVE, PAGE_NOACCESS));
+    base_ = reserve_space();
     if (!base_) {
-        LOG("GuestMemory: could not reserve 4 GB of address space (error %lu)", GetLastError());
+        LOG("GuestMemory: could not reserve 4 GB of address space (error %lu)", last_error());
         return false;
     }
     return true;
@@ -33,8 +72,8 @@ bool GuestMemory::map(uint32_t addr, uint32_t size, uint32_t prot, const char* n
             return false;
         }
     }
-    if (!VirtualAlloc(base_ + addr, size, MEM_COMMIT, PAGE_READWRITE)) {
-        LOG("GuestMemory::map(%08x, %x, %s): commit failed (error %lu)", addr, size, name, GetLastError());
+    if (!commit(base_ + addr, size)) {
+        LOG("GuestMemory::map(%08x, %x, %s): commit failed (error %lu)", addr, size, name, last_error());
         return false;
     }
     regions_.push_back({addr, size, prot, name});
@@ -50,8 +89,7 @@ void GuestMemory::protect(uint32_t addr, uint32_t size, uint32_t prot) {
 
 bool GuestMemory::host_writable(uint32_t addr, uint32_t size) {
     const uint32_t a = addr & ~(kPage - 1), e = (addr + size + kPage - 1) & ~(kPage - 1);
-    DWORD old = 0;
-    return VirtualProtect(base_ + a, e - a, PAGE_READWRITE, &old) != 0;
+    return make_rw(base_ + a, e - a);
 }
 
 const Region* GuestMemory::region_of(uint32_t addr) const {
