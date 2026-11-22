@@ -55,6 +55,18 @@ using Clock = std::chrono::steady_clock;
 
 namespace {
 
+// Vsync on = adaptive where the driver has it (a frame that misses the refresh is shown at once,
+// with a tear, instead of waiting for the next one: at 100 Hz a 10.5 ms frame stays ~95 fps rather
+// than dropping to 50), else classic vsync.
+void set_vsync(bool on) {
+    if (on && SDL_GL_SetSwapInterval(-1) == 0) {
+        LOG("display: adaptive vsync");
+        return;
+    }
+    SDL_GL_SetSwapInterval(on ? 1 : 0);
+    LOG("display: vsync %s", on ? "on" : "off");
+}
+
 gles1::TextureFilter filter_of(const std::string& s) {
     return s == "nearest" ? gles1::TextureFilter::Nearest : s == "bilinear" ? gles1::TextureFilter::Bilinear
          : s == "trilinear" ? gles1::TextureFilter::Trilinear : gles1::TextureFilter::Game;
@@ -159,7 +171,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     apply_window_mode(win, cfg);
     SDL_GLContext ctx = SDL_GL_CreateContext(win);
     if (!ctx) FATAL("SDL_GL_CreateContext: %s", SDL_GetError());
-    SDL_GL_SetSwapInterval(cfg.vsync ? 1 : 0);
+    set_vsync(cfg.vsync);
     gles1::set_shader_renderer(cfg.renderer == "shader");
     if (!gles1::load_gl()) FATAL("required OpenGL entry points are missing");
     LOG("GL: %s / %s", glGetString(GL_RENDERER), glGetString(GL_VERSION));
@@ -527,7 +539,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 stats.view_h = rh;
                 if (ui::draw(cfg, stats)) {
                     if (cfg.window_mode != before.window_mode) apply_window_mode(win, cfg);
-                    if (cfg.vsync != before.vsync) SDL_GL_SetSwapInterval(cfg.vsync ? 1 : 0);
+                    if (cfg.vsync != before.vsync) set_vsync(cfg.vsync);
                     if (cfg.render_scale != before.render_scale || cfg.msaa != before.msaa || cfg.fit != before.fit) {
                         int iw, ih;
                         internal_size(cfg, kW, kH, dw, dh, &iw, &ih);
