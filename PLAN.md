@@ -305,7 +305,7 @@ Queue:
   on/off ToggleButton, which was hidden with them); now always drawn, verified at 800 and 853.
 - ✅ Q5 Draw distance slider live + LOD options (5C.2, 5C.3), memory and fps measured downtown.
 - ✅ Q6 Post-process groundwork (5C.0): pass between the 3D scene and the HUD, readable depth.
-- Q7 Bloom (5C.5).
+- ✅ Q7 Bloom (5C.5).
 - Q8 Fog step 2 (5C.4): height fog, sun haze at sunrise/sunset, bloom stronger in fog.
 - Q9 Dynamic lights (5C.6, owner said yes): car headlights/taillights, lampposts, muzzle flash.
 - Q10 Android (5B), renderer chosen by us for Snapdragon **and** Mali: arm64 build, GLES 3 shader

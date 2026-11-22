@@ -30,6 +30,12 @@ struct Settings {
     float night_people_lift = 0.35f;        // people/cars at night and dusk: 0 = as dark as the city, 1 = as the game drew them
     std::string fog = "atmospheric";        // game (thin, only on the far city) | atmospheric (haze by distance, hides the horizon)
     float fog_strength = 1.5f;              // atmospheric fog: 0 = none, 1 = 97% at the far city's end
+    bool bloom = true;                      // glow around bright parts (screen effect)
+    float bloom_intensity = 0.8f;           // 0..2 (up to 3x more at night, see post.cpp)
+    float bloom_threshold = 0.75f;          // 0..1: brightness where the glow starts
+    float bloom_radius = 1.0f;              // 0.5..2: glow size
+    bool height_fog = true;                 // fog step 2: thicker near the ground and the sea, sun haze
+    float height_fog_amount = 1.0f;         // 0..2
 
     // [controls]
     std::string touch_controls = "auto";    // auto (hide while a pad/keyboard drives) | show | hide

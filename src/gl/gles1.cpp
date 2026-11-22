@@ -959,11 +959,7 @@ bool load_gl() {
     const char* ext = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
     g_fog_radial = ext && std::strstr(ext, "GL_NV_fog_distance");
     LOG("GL: fog distance %s", g_fog_radial ? "radial (NV_fog_distance)" : "by depth plane");
-    if (ok && post::init()) {
-        post::Settings ps;
-        ps.test = std::getenv("GANGSTAR_POST_TEST");
-        post::set_settings(ps);
-    }
+    if (ok) post::init();  // settings come from the game (post::set_settings)
     return ok;
 }
 

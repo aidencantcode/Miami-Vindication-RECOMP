@@ -238,6 +238,21 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
                              {"game", "Game (thin, only on the far city)"}});
             if (s.fog == "atmospheric")
                 ch |= ImGui::SliderFloat("Fog strength", &s.fog_strength, 0.0f, 2.0f, "%.2f");
+            ch |= ImGui::Checkbox("Ground fog and sun haze", &s.height_fog);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Extra haze close to the ground and over the sea, and a warm glow toward\n"
+                                  "the sun at sunrise and sunset (screen effect).");
+            if (s.height_fog) ch |= ImGui::SliderFloat("Ground fog amount", &s.height_fog_amount, 0.0f, 2.0f, "%.2f");
+            ImGui::Separator();
+            ch |= ImGui::Checkbox("Bloom", &s.bloom);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Bright parts glow: lit windows, neon, headlights, the sky at sunset.");
+            if (s.bloom) {
+                ch |= ImGui::SliderFloat("Bloom intensity", &s.bloom_intensity, 0.0f, 2.0f, "%.2f");
+                ch |= ImGui::SliderFloat("Bloom threshold", &s.bloom_threshold, 0.3f, 1.0f, "%.2f");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("How bright something must be to glow (lower = more glow).");
+                ch |= ImGui::SliderFloat("Bloom radius", &s.bloom_radius, 0.5f, 2.0f, "%.2f");
+            }
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Audio")) {

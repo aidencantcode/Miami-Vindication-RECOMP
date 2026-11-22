@@ -1120,6 +1120,17 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
 - Debug: `GANGSTAR_POST_TEST=invert` (3D scene inverted, HUD untouched: verified) and `=depth`
   (eye distance reconstructed from depth, both ranges: verified continuous).
 
+### 5C.5 Bloom (done 2026-11-22, Q7)
+- `post.cpp`: bright pass at half size (soft threshold on the brightest channel, 13 taps), 6-level
+  dual-filter blur (down, then up with every scale added into the level above, RGBA16F), composite
+  adds the glow before the HUD. Settings `[graphics] bloom`, `bloom_intensity` (0.8),
+  `bloom_threshold` (0.75), `bloom_radius` (1.0), live in F1 → Graphics.
+- Neon tubes and lit windows are about as bright as the daytime sky, so a fixed setting either washes
+  out noon or barely shows at night. The glow scales with darkness taken from the time-of-day fog
+  colour (night 0..1 from its luminance): up to 3× intensity and threshold −0.15 at night.
+  Checked at 12:00 (soft glow on the sky and white towers), 19:05 and 23:30 (neon, windows,
+  headlights glow).
+
 ### 5C.2 / 5C.3 Draw distance live, LOD pushed out (done 2026-11-22, Q5)
 - gPhonePerf +0x0C / +0x10 are read every frame: writing them live moves the near city's far plane
   at once (trace: f = 48001 right after switching 1× → 4×). The profile's unscaled values are kept

@@ -40,6 +40,7 @@
 #include "game/mods.h"
 #include "game/night_textures.h"
 #include "gl/gles1.h"
+#include "gl/post.h"
 #include "hle/hle.h"
 #include "hle/overrides.h"
 #include "input/input.h"
@@ -92,6 +93,18 @@ void apply_window_mode(SDL_Window* win, const settings::Settings& s) {
         SDL_SetWindowSize(win, s.window_w, s.window_h);
         SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     }
+}
+
+void apply_post_settings(const settings::Settings& s) {
+    post::Settings p;
+    p.bloom = s.bloom;
+    p.bloom_intensity = s.bloom_intensity;
+    p.bloom_threshold = s.bloom_threshold;
+    p.bloom_radius = s.bloom_radius;
+    p.height_fog = s.height_fog;
+    p.height_fog_amount = s.height_fog_amount;
+    p.test = std::getenv("GANGSTAR_POST_TEST");
+    post::set_settings(p);
 }
 
 void apply_audio_volumes(const settings::Settings& s) {
@@ -157,6 +170,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
         kH, vc.width, vc.height, cfg.render_scale > 0 ? (std::to_string(cfg.render_scale) + "x").c_str() : "native",
         vc.msaa);
     gles1::set_anisotropy(cfg.anisotropy);
+    apply_post_settings(cfg);
     gles1::set_texture_filter(filter_of(cfg.texture_filter));
     ui::init(win, ctx);
     nighttex::init(paths.data);  // the game's unused night city textures (game/night_textures.h)
@@ -502,6 +516,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                     if (cfg.anisotropy != before.anisotropy) gles1::set_anisotropy(cfg.anisotropy);
                     if (cfg.texture_filter != before.texture_filter) gles1::set_texture_filter(filter_of(cfg.texture_filter));
                     apply_audio_volumes(cfg);
+                    apply_post_settings(cfg);
                     if (cfg.camera_mode != before.camera_mode) mods::set_camera_mode(cfg.camera_mode);
                     mods::set_free_look_return(cfg.freelook_return_delay, cfg.freelook_return_speed);
                     if (cfg.smooth_physics != before.smooth_physics) mods::set_smooth_physics(cfg.smooth_physics);
