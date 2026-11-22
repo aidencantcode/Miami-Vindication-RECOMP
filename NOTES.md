@@ -948,6 +948,17 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   Needs RE of that widget (5A.4/5A.7). Sprint (type 15) is a hidden button that appears while
   running (5A.1).
 
+### Owner feedback round 2 (2026-11-22, after the unattended run)
+- **Wrong textures on gates, sign boards, buildings: fixed.** night_textures recognised day
+  textures by the first 1 KB of a mip level. `alpha_atlas48` / `atlas56` and `alpha_atlas49` /
+  `atlas57` have identical first 1 KB on levels 0 and 1 (checked with a script over all 2404 data
+  files; `concrete_01` / `concrete_02` collide too but are the same file), so one of each pair was
+  registered as the other and got the other's image on every day/night switch (a DXT1 slot even got
+  DXT5 data). Now the fingerprint only picks candidates; a hash of the whole level must equal the
+  candidate file's level (read once, cached). Also: a texture id refilled with uncompressed data is
+  forgotten. `GANGSTAR_NIGHTTEX_CHECK=1` runs every day file through the matcher: 357/357 levels
+  match their own file, the 4 look-alikes are rejected.
+
 ### 5A.1 Sprint forward/back (fixed 2026-11-22)
 - `AnalogStick::processTouch` (decomp_input.c): drag in screen pixels → 480×320 units as
   dx / sy and dy / sx with sx = w/480, sy = h/320 (**swapped**; harmless on a 480×320 phone), then

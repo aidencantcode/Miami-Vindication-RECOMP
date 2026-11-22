@@ -1047,6 +1047,8 @@ H(tex_image_2d) {
     }
 #endif
     glTexImage2D(t, l, ifmt, w, h, b, f, ty, px);
+    // An id refilled with uncompressed data no longer holds a (night-swappable) world texture.
+    if (l == 0 && t == GL_TEXTURE_2D && g_tex_observer.on_delete) g_tex_observer.on_delete(g_bound_2d[g_unit]);
 }
 H(tex_subimage_2d) {
     GLenum t = a.u32(); GLint l = a.s32(), x = a.s32(), y = a.s32(); GLsizei w = a.s32(), h = a.s32();

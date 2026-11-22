@@ -46,7 +46,7 @@ struct TextureObserver {
     // every glCompressedTexImage2D of a 2D texture (tex = the texture bound when the game uploaded)
     std::function<void(unsigned tex, int level, unsigned format, int w, int h, const uint8_t* data, int size)>
         on_compressed_upload;
-    std::function<void(unsigned tex)> on_delete;
+    std::function<void(unsigned tex)> on_delete;  // deleted, or refilled with uncompressed data
 };
 void set_texture_observer(TextureObserver obs);
 struct CompressedLevel { int w, h; const uint8_t* data; int size; };

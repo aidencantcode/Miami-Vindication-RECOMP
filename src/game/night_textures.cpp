@@ -1,6 +1,7 @@
 #include "game/night_textures.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -115,6 +116,22 @@ uint64_t fingerprint(const uint8_t* data, int size, int w, int h) {
     return x;
 }
 
+// Hash of a whole mip level. The 1 KB fingerprint only picks candidates: different atlases can
+// start with the same bytes (alpha_atlas48 / atlas56 and alpha_atlas49 / atlas57 do: identical
+// first 1 KB on levels 0 and 1), and taking the wrong one put another atlas's images on the city.
+uint64_t full_hash(const uint8_t* data, int size) {
+    uint64_t x = 1469598103934665603ull ^ uint64_t(size);
+    int i = 0;
+    for (; i + 8 <= size; i += 8) {
+        uint64_t v;
+        std::memcpy(&v, data + i, 8);
+        x = (x ^ v) * 1099511628211ull;
+        x ^= x >> 29;
+    }
+    for (; i < size; ++i) x = (x ^ data[i]) * 1099511628211ull;
+    return x;
+}
+
 struct Known { int pair; int base_level; };  // which pair, which file mip is the texture's level 0
 struct Tex {
     int pair = -1, base_level = 0, levels = 0;
@@ -123,7 +140,8 @@ struct Tex {
 };
 
 std::vector<Pair> g_pairs;
-std::unordered_map<uint64_t, Known> g_by_fp;
+std::unordered_multimap<uint64_t, Known> g_by_fp;      // 1 KB fingerprint -> candidates
+std::unordered_map<uint64_t, uint64_t> g_full;         // (pair << 8 | level) -> full_hash of the file's level
 std::unordered_map<unsigned, Tex> g_tex;
 std::deque<unsigned> g_queue;
 bool g_night = false, g_ready = false;
@@ -164,20 +182,71 @@ void index_pair(int i) {
         std::vector<uint8_t> buf(size_t(size), 0);
         f.seekg(hdr->level_offset(l));
         if (!f.read(reinterpret_cast<char*>(buf.data()), size)) break;
-        g_by_fp[fingerprint(buf.data(), hdr->level_size(l), hdr->level_w(l), hdr->level_h(l))] = {i, l};
+        g_by_fp.emplace(fingerprint(buf.data(), hdr->level_size(l), hdr->level_w(l), hdr->level_h(l)), Known{i, l});
     }
+}
+
+// full_hash of mip level `level` of the pair's day file (read once, then cached); 0 if unreadable.
+uint64_t file_level_hash(int pair, int level, int size) {
+    const uint64_t key = uint64_t(pair) << 8 | uint64_t(level);
+    if (auto it = g_full.find(key); it != g_full.end()) return it->second;
+    uint64_t h = 0;
+    const auto hdr = read_dds(g_pairs[size_t(pair)].day, false);
+    if (hdr && level < hdr->levels && hdr->level_size(level) == size) {
+        std::ifstream f(g_pairs[size_t(pair)].day, std::ios::binary);
+        std::vector<uint8_t> buf(static_cast<size_t>(size));
+        f.seekg(hdr->level_offset(level));
+        if (f.read(reinterpret_cast<char*>(buf.data()), size)) h = full_hash(buf.data(), size);
+    }
+    g_full[key] = h;
+    return h;
+}
+
+// The pair (and file mip) whose day image this level-0 upload is, or null.
+const Known* find_match(unsigned tex, const uint8_t* data, int size, int w, int h) {
+    auto [lo, hi] = g_by_fp.equal_range(fingerprint(data, size, w, h));
+    if (lo == hi) return nullptr;
+    const uint64_t hash = full_hash(data, size);
+    for (auto it = lo; it != hi; ++it) {
+        if (file_level_hash(it->second.pair, it->second.base_level, size) == hash) return &it->second;
+        if (static int n = 0; n++ < 20)
+            LOG("night textures: texture %u starts like %s (level %d) but is not it", tex,
+                g_pairs[size_t(it->second.pair)].day.filename().string().c_str(), it->second.base_level);
+    }
+    return nullptr;
+}
+
+// GANGSTAR_NIGHTTEX_CHECK=1: every day file's first mip levels must match their own pair (or a
+// file with the same bytes), as if the game had uploaded them.
+void self_check() {
+    int ok = 0, bad = 0;
+    for (int i = 0; i < int(g_pairs.size()); ++i) {
+        const auto d = read_dds(g_pairs[size_t(i)].day, true);
+        if (!d) continue;
+        for (int l = 0; l < std::min(3, d->levels); ++l) {
+            const uint8_t* p = d->bytes.data() + d->level_offset(l);
+            const Known* m = find_match(0, p, d->level_size(l), d->level_w(l), d->level_h(l));
+            const bool same = m && (m->pair == i || file_level_hash(m->pair, m->base_level, d->level_size(l)) ==
+                                                         full_hash(p, d->level_size(l)));
+            if (same && m->base_level == l) { ++ok; continue; }
+            ++bad;
+            LOG("night textures check: %s level %d -> %s", g_pairs[size_t(i)].day.filename().string().c_str(), l,
+                m ? g_pairs[size_t(m->pair)].day.filename().string().c_str() : "(none)");
+        }
+    }
+    LOG("night textures check: %d levels match their own file, %d do not", ok, bad);
 }
 
 void on_upload(unsigned tex, int level, unsigned format, int w, int h, const uint8_t* data, int size) {
     if (!tex) return;
     if (level == 0) {
-        auto it = g_by_fp.find(fingerprint(data, size, w, h));
-        if (it == g_by_fp.end()) {
+        const Known* match = find_match(tex, data, size, w, h);
+        if (!match) {
             if (g_tex.erase(tex)) gles1::set_world_texture(tex, gles1::WorldTex::None);  // the id now holds something else
             return;
         }
         Tex& t = g_tex[tex];
-        t = {it->second.pair, it->second.base_level, 1, format, false};
+        t = {match->pair, match->base_level, 1, format, false};
         gles1::set_world_texture(tex, gles1::WorldTex::Day);  // shows its day image: gets the time-of-day tint
         if (g_night) g_queue.push_back(tex);  // loaded during the night: give it its night image
     } else if (auto it = g_tex.find(tex); it != g_tex.end()) {
@@ -225,6 +294,7 @@ bool init(const fs::path& data_dir) {
     };
     gles1::set_texture_observer(std::move(obs));
     g_ready = !g_by_fp.empty();
+    if (const char* e = std::getenv("GANGSTAR_NIGHTTEX_CHECK"); e && *e == '1') self_check();
     LOG("night textures: %zu day/night pairs in the data, %zu fingerprints", g_pairs.size(), g_by_fp.size());
     return g_ready;
 }
