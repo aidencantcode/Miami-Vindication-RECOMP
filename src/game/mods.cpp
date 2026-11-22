@@ -66,6 +66,11 @@ bool is_control(uint32_t obj) {
     return false;
 }
 
+// Controls that stay drawn with the touch controls hidden: the radio on/off ToggleButton (+0x74) is
+// the right end of the radio station box (power button and the frame's right border, one sprite in
+// the HUD atlas); hiding it cut the box off after the right arrow (5A.2).
+bool keep_drawn(uint32_t obj) { return g_hud && obj && g_rt->mem().r32(g_hud + 0x74) == obj; }
+
 float f32_at(uint32_t a) {
     float f;
     std::memcpy(&f, g_rt->mem().ptr(a), 4);
@@ -277,7 +282,11 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
     for (const char* fn : {"_ZNK11AnalogStick6draw2dEv", "_ZNK14AnimatedButton6draw2dEv", "_ZNK10HudElement6draw2dEv",
                            "_ZNK12SlideControl6draw2dEv", "_ZNK11SwipeButton6draw2dEv", "_ZNK12ToggleButton6draw2dEv",
                            "_ZNK5Wheel6draw2dEv"})
-        rt.hook_function(fn, {[](cpu::Cpu& c) { return g_hidden && is_control(c.reg(cpu::R0)); }, nullptr});
+        rt.hook_function(fn, {[](cpu::Cpu& c) {
+                                  const uint32_t obj = c.reg(cpu::R0);
+                                  return g_hidden && is_control(obj) && !keep_drawn(obj);
+                              },
+                              nullptr});
 
     // ---- statistics: the game's own time step (Application::_Update(int dt_ms)) --------------------
     // Also smooth physics: GS3DStuff::update steps Box2D and every object's pre/post-physics with a

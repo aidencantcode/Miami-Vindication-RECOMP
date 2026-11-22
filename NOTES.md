@@ -802,8 +802,13 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
 - **Radio station box** (top HUD while driving): the frame's right border is cut by a straight
   vertical edge at the same authoring position at 800 and 854 wide, while the arrows and text
   are complete. Ruled out: glScissor (only one call, at init), face culling (same with culling
-  off), screen width. Next suspects: the sprite/gameswf path that draws the frame (mirrored
-  right half or atlas UVs). Not fixed yet.
+  off), screen width. **Solved 2026-11-22 (5A.2 / Q4):** the frame quad (HUD atlas 1024², u
+  0.7656..0.8799) ends right after the right arrow on purpose; the power button and the frame's
+  right border are the radio on/off **ToggleButton** (CHudManager +0x74), which the port hid with
+  the other touch controls. It is now always drawn (`keep_drawn`). Verified complete at 800 (5:3)
+  and 853 (16:9) wide. Found with the frame trace's new 2D detail: per-draw and per-quad vertex /
+  uv bounds and a TGA dump of each traced 2D texture (`GANGSTAR_GL_FRAME_TRACE=<frame>`, files in
+  GANGSTAR_HOME).
 - **Camera RE so far**: `CameraManager::goBehind` is only called from `Player::initDriving`.
   `FollowCamera::update` places the camera at lookAt + v(character vfunc +300) × distance each
   frame; drags go through `FollowCamera::updateAngles(dx, dy)` -> this+0x34 (yaw) / +0x38

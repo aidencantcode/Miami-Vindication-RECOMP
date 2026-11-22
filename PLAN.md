@@ -301,7 +301,8 @@ Queue:
 - ✅ Q2 Free look, GTA VC PC style (5A.6): direct mouse, camera stays put, slow return after a pause, on
   foot and in cars; settings for the pause and the return speed.
 - ✅ Q3 Aim leftovers: arm pose above the crosshair, aim point near walls (world ray), RB drive-by test.
-- Q4 Radio box (5A.2): owner says it looks fixed; confirm at 800, 854 and 16:9 widths, close it.
+- ✅ Q4 Radio box (5A.2): it was still cut with touch controls hidden (the right end is the radio
+  on/off ToggleButton, which was hidden with them); now always drawn, verified at 800 and 853.
 - Q5 Draw distance slider live + LOD options (5C.2, 5C.3), memory and fps measured downtown.
 - Q6 Post-process groundwork (5C.0): pass between the 3D scene and the HUD, readable depth.
 - Q7 Bloom (5C.5).

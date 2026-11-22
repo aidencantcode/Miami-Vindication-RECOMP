@@ -484,26 +484,109 @@ H(tex_envi) { GLenum t = a.u32(), p = a.u32(); GLint v = a.s32(); float fv = flo
 H(tex_envfv) { GLenum t = a.u32(), p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32())); light_trace("glTexEnvfv", t, p, v, param_count(p)); glTexEnvfv(t, p, v); }
 
 // ---- vertex arrays and drawing ---------------------------------------------------------------------
-H(vertex_pointer) { GLint s = a.s32(); GLenum t = a.u32(); GLsizei st = a.s32(); glVertexPointer(s, t, st, array_ptr(c, a.u32(), g_array_buffer)); }
-H(texcoord_pointer) { GLint s = a.s32(); GLenum t = a.u32(); GLsizei st = a.s32(); glTexCoordPointer(s, t, st, array_ptr(c, a.u32(), g_array_buffer)); }
+// Frame trace of 2D draws: the client arrays (guest pointers) and texture sizes, to print each draw's
+// vertex / texture coordinate bounds (debugging HUD sprites, e.g. the clipped radio box).
+struct ArrayDbg { GLint size = 0; GLenum type = 0; GLsizei stride = 0; uint32_t ptr = 0; GLuint buf = 0; };
+ArrayDbg g_dbg_vtx, g_dbg_tc;
+GLenum g_client_tex = GL_TEXTURE0;
+std::unordered_map<GLuint, std::pair<int, int>> g_dbg_tex_size;
+float dbg_component(Cpu& c, const ArrayDbg& d, uint32_t i, int k) {
+    const int sz = d.type == GL_FLOAT || d.type == GL_FIXED ? 4 : d.type == GL_SHORT ? 2 : 1;
+    const uint32_t a = d.ptr + i * (d.stride ? d.stride : d.size * sz) + k * sz;
+    switch (d.type) {
+        case GL_FLOAT: { float f; std::memcpy(&f, M.ptr(a), 4); return f; }
+        case GL_FIXED: return int32_t(M.r32(a)) / 65536.0f;
+        case GL_SHORT: return float(int16_t(M.r16(a)));
+        case GL_BYTE: return float(int8_t(M.r8(a)));
+        default: return float(M.r8(a));
+    }
+}
+void trace_geometry(Cpu& c, GLint first, GLsizei n, GLenum itype, uint32_t iptr, GLuint tex) {
+    if (!frame_tracing() || is_perspective(g_proj.back()) || g_dbg_vtx.buf || !g_dbg_vtx.ptr || n <= 0) return;
+    float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f, u0 = 1e9f, u1 = -1e9f, v0 = 1e9f, v1 = -1e9f;
+    const bool uv = g_dbg_tc.ptr && !g_dbg_tc.buf;
+    for (GLsizei j = 0; j < n; ++j) {
+        uint32_t i = uint32_t(first + j);
+        if (iptr) i = itype == GL_UNSIGNED_SHORT ? M.r16(iptr + 2 * j) : itype == GL_UNSIGNED_BYTE ? M.r8(iptr + j) : M.r32(iptr + 4 * j);
+        const float x = dbg_component(c, g_dbg_vtx, i, 0), y = dbg_component(c, g_dbg_vtx, i, 1);
+        x0 = std::min(x0, x), x1 = std::max(x1, x), y0 = std::min(y0, y), y1 = std::max(y1, y);
+        if (uv) {
+            const float u = dbg_component(c, g_dbg_tc, i, 0), v = dbg_component(c, g_dbg_tc, i, 1);
+            u0 = std::min(u0, u), u1 = std::max(u1, u), v0 = std::min(v0, v), v1 = std::max(v1, v);
+        }
+    }
+    const Mat4& mv = g_mv.back();
+    GLint wrap_s = 0;
+    glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, &wrap_s);
+    const auto ts = g_dbg_tex_size.count(tex) ? g_dbg_tex_size[tex] : std::pair<int, int>{0, 0};
+    trace_flush();
+    LOG("frame-trace     2d n=%d tex %u (%dx%d wrap %#x) xy %.1f..%.1f x %.1f..%.1f mv scale %g %g move %.1f %.1f uv %.3f..%.3f x %.3f..%.3f",
+        n, tex, ts.first, ts.second, unsigned(wrap_s), x0, x1, y0, y1, mv.m[0], mv.m[5], mv.m[12], mv.m[13], u0, u1, v0, v1);
+    static std::unordered_map<GLuint, bool> dumped;  // save each traced 2D texture once (TGA, next to the log)
+    if (tex && !dumped[tex]) {
+        dumped[tex] = true;
+        GLint w = 0, h = 0;
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &w);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &h);
+        if (w > 0 && h > 0 && w <= 4096 && h <= 4096) {
+            std::vector<uint8_t> px(size_t(w) * h * 4);
+            glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, px.data());
+            const char* home = std::getenv("GANGSTAR_HOME");
+            const std::string path = std::string(home ? home : ".") + "/tex_" + std::to_string(tex) + ".tga";
+            if (FILE* f = std::fopen(path.c_str(), "wb")) {
+                const uint8_t hdr[18] = {0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, uint8_t(w), uint8_t(w >> 8), uint8_t(h), uint8_t(h >> 8), 32, 8};
+                std::fwrite(hdr, 1, 18, f);
+                std::fwrite(px.data(), 1, px.size(), f);
+                std::fclose(f);
+                LOG("frame-trace     texture %u is %dx%d -> %s", tex, w, h, path.c_str());
+            }
+        }
+    }
+    if (!iptr || n % 6) return;
+    for (GLsizei q = 0; q < n; q += 6) {  // indexed quads (two triangles each)
+        float qx0 = 1e9f, qx1 = -1e9f, qy0 = 1e9f, qy1 = -1e9f, qu0 = 1e9f, qu1 = -1e9f, qv0 = 1e9f, qv1 = -1e9f;
+        for (int j = 0; j < 6; ++j) {
+            const uint32_t i = itype == GL_UNSIGNED_SHORT ? M.r16(iptr + 2 * (q + j)) : M.r8(iptr + q + j);
+            const float x = dbg_component(c, g_dbg_vtx, i, 0), y = dbg_component(c, g_dbg_vtx, i, 1);
+            qx0 = std::min(qx0, x), qx1 = std::max(qx1, x), qy0 = std::min(qy0, y), qy1 = std::max(qy1, y);
+            if (uv) {
+                const float u = dbg_component(c, g_dbg_tc, i, 0), v = dbg_component(c, g_dbg_tc, i, 1);
+                qu0 = std::min(qu0, u), qu1 = std::max(qu1, u), qv0 = std::min(qv0, v), qv1 = std::max(qv1, v);
+            }
+        }
+        LOG("frame-trace       quad xy %.1f..%.1f x %.1f..%.1f uv %.4f..%.4f x %.4f..%.4f", qx0, qx1, qy0, qy1, qu0, qu1, qv0, qv1);
+    }
+}
+H(vertex_pointer) {
+    GLint s = a.s32(); GLenum t = a.u32(); GLsizei st = a.s32(); uint32_t p = a.u32();
+    g_dbg_vtx = {s, t, st, p, g_array_buffer};
+    glVertexPointer(s, t, st, array_ptr(c, p, g_array_buffer));
+}
+H(texcoord_pointer) {
+    GLint s = a.s32(); GLenum t = a.u32(); GLsizei st = a.s32(); uint32_t p = a.u32();
+    if (g_client_tex == GL_TEXTURE0) g_dbg_tc = {s, t, st, p, g_array_buffer};
+    glTexCoordPointer(s, t, st, array_ptr(c, p, g_array_buffer));
+}
 H(color_pointer) { GLint s = a.s32(); GLenum t = a.u32(); GLsizei st = a.s32(); glColorPointer(s, t, st, array_ptr(c, a.u32(), g_array_buffer)); }
 H(normal_pointer) { GLenum t = a.u32(); GLsizei st = a.s32(); glNormalPointer(t, st, array_ptr(c, a.u32(), g_array_buffer)); }
-H(client_active_texture) { p_glClientActiveTexture(a.u32()); }
+H(client_active_texture) { g_client_tex = a.u32(); p_glClientActiveTexture(g_client_tex); }
 GLuint bound_tex0();
 H(draw_arrays) {
     GLenum m = a.u32(); GLint f = a.s32(); GLsizei n = a.s32();
     trace_draw(bound_tex0(), n);
+    trace_geometry(c, f, n, 0, 0, bound_tex0());
     tint_before_draw();
     fog_before_draw();
     glDrawArrays(m, f, n);
     ++g_draws;
 }
 H(draw_elements) {
-    GLenum m = a.u32(); GLsizei n = a.s32(); GLenum t = a.u32();
+    GLenum m = a.u32(); GLsizei n = a.s32(); GLenum t = a.u32(); uint32_t ip = a.u32();
     trace_draw(bound_tex0(), n);
+    if (!g_element_buffer) trace_geometry(c, 0, n, t, ip, bound_tex0());
     tint_before_draw();
     fog_before_draw();
-    glDrawElements(m, n, t, array_ptr(c, a.u32(), g_element_buffer));
+    glDrawElements(m, n, t, array_ptr(c, ip, g_element_buffer));
     ++g_draws;
 }
 
@@ -731,6 +814,7 @@ H(tex_parameterf) {
 H(tex_image_2d) {
     GLenum t = a.u32(); GLint l = a.s32(), ifmt = a.s32(); GLsizei w = a.s32(), h = a.s32(); GLint b = a.s32();
     GLenum f = a.u32(), ty = a.u32();
+    if (l == 0) g_dbg_tex_size[bound_tex0()] = {w, h};
     glTexImage2D(t, l, ifmt, w, h, b, f, ty, host(c, a.u32()));
 }
 H(tex_subimage_2d) {
@@ -742,6 +826,7 @@ H(compressed_tex_image_2d) {
     GLenum t = a.u32(); GLint l = a.s32(); GLenum ifmt = a.u32(); GLsizei w = a.s32(), h = a.s32(); GLint b = a.s32();
     GLsizei n = a.s32();
     const void* data = host(c, a.u32());
+    if (l == 0) g_dbg_tex_size[bound_tex0()] = {w, h};
     p_glCompressedTexImage2D(t, l, ifmt, w, h, b, n, data);
     if (t == GL_TEXTURE_2D && g_tex_observer.on_compressed_upload)
         g_tex_observer.on_compressed_upload(g_bound_2d[g_unit], l, ifmt, w, h, static_cast<const uint8_t*>(data), n);
