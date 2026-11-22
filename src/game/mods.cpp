@@ -923,6 +923,18 @@ void frame(cpu::Cpu& c, double dt) {
     if (g_aim_blend == 0) g_aim_valid = false;
 }
 
+bool player_position(cpu::Cpu& c, float out[3]) {
+    auto& r = c.rt();
+    const uint32_t p = player_obj(r);
+    if (!p) return false;
+    static uint32_t scratch = 0;
+    if (!scratch) scratch = r.heap().alloc(16);
+    auto& m = r.mem();
+    c.call(m.r32(m.r32(p + 4) + 0x5c), {scratch, p + 4});  // LevelObject::getPosition (feet)
+    for (int i = 0; i < 3; ++i) out[i] = f32_at(scratch + 4 * i);
+    return std::isfinite(out[0]) && std::isfinite(out[1]) && std::isfinite(out[2]);
+}
+
 uint32_t take_camera_to_watch() {
     const uint32_t a = g_cam_watch;
     if (a) {

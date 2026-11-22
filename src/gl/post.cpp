@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "gl/glmath.h"
 
 namespace post {
 
@@ -43,7 +44,9 @@ namespace {
     X(PFNGLFRAMEBUFFERTEXTURE2DPROC, glFramebufferTexture2D)                    \
     X(PFNGLCHECKFRAMEBUFFERSTATUSPROC, glCheckFramebufferStatus)                \
     X(PFNGLBLITFRAMEBUFFERPROC, glBlitFramebuffer)                              \
-    X(PFNGLBINDBUFFERPROC, glBindBuffer)
+    X(PFNGLBINDBUFFERPROC, glBindBuffer)                                        \
+    X(PFNGLDISABLEVERTEXATTRIBARRAYPROC, glDisableVertexAttribArray)            \
+    X(PFNGLBLENDFUNCSEPARATEPROC, glBlendFuncSeparate)
 
 #define DECLARE(type, name) type p_##name = nullptr;
 POST_GL_FUNCS(DECLARE)
@@ -382,35 +385,12 @@ void pass_into(const Target& dst, GLuint prog, GLuint src_tex, float tx, float t
     draw_fullscreen();
 }
 
-// General 4x4 inverse (column-major), false if singular.
-bool invert4(const float* m, float* out) {
-    float inv[16];
-    inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
-    inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
-    inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
-    inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] - m[8] * m[6] * m[13] - m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
-    inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] - m[9] * m[3] * m[14] - m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
-    inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] + m[8] * m[3] * m[14] + m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
-    inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] - m[8] * m[3] * m[13] - m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
-    inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] + m[8] * m[2] * m[13] + m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
-    inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] + m[5] * m[3] * m[14] + m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
-    inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] - m[4] * m[3] * m[14] - m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
-    inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] + m[4] * m[3] * m[13] + m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
-    inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] - m[4] * m[2] * m[13] - m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
-    inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] - m[5] * m[3] * m[10] - m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
-    inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] + m[4] * m[3] * m[10] + m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
-    inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] - m[4] * m[3] * m[9] - m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
-    inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] + m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
-    const float det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
-    if (std::abs(det) < 1e-12f) return false;
-    for (int i = 0; i < 16; ++i) out[i] = inv[i] / det;
-    return true;
-}
+using glmath::invert4;
 
 // Ground fog parameters (world units are ~1 cm: the player is ~180 tall).
 constexpr float kFogFalloff = 1.0f / 1500.0f;   // density halves every ~10 m of height
 constexpr float kFogDensity = 1.2e-5f;          // ~30% extra haze over 300 m at the reference height
-constexpr float kFogRefBelowCamera = 400.0f;    // reference height: ~4 m below the camera (the street)
+constexpr float kFogRefAboveGround = 50.0f;     // reference height: just above the player's feet (set_ground)
 
 // Muzzle flashes (world space), added by the game hooks for the player's shots.
 struct Flash { float p[3]; Uint32 t; };
@@ -462,6 +442,15 @@ bool init() {
 
 void set_settings(const Settings& s) { g_set = s; }
 
+namespace {
+bool g_player_valid = false;
+float g_player[3] = {};
+}
+void set_player(bool valid, const float pos[3]) {
+    g_player_valid = valid;
+    if (valid) std::memcpy(g_player, pos, sizeof g_player);
+}
+
 void flash(float x, float y, float z) {
     Flash& f = g_flashes[g_flash_next++ % 4];
     f.p[0] = x;
@@ -483,27 +472,77 @@ void set_time_of_day(int minute) {
 
 bool active() { return g_ok && (g_set.test != nullptr || g_set.bloom || g_set.height_fog || g_set.lights); }
 
-void run(const Scene& sc) {
-    if (!active() || sc.w <= 0 || sc.h <= 0) return;
-    // Save what the game's fixed-function rendering relies on; the attrib stacks cover enables,
-    // viewport, colour/depth masks, texture bindings of every unit and the client arrays.
-    GLint prev_draw = 0, prev_read = 0, prev_prog = 0, prev_array = 0, prev_elem = 0;
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_draw);
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_read);
-    glGetIntegerv(GL_CURRENT_PROGRAM, &prev_prog);
-    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prev_array);
-    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &prev_elem);
-    glPushAttrib(GL_ALL_ATTRIB_BITS);
-    glPushClientAttrib(GL_CLIENT_ALL_ATTRIB_BITS);
+// The state GLES 3 has that the passes change, saved and restored by hand (the shader renderer and
+// Android: no attribute stacks there).
+struct SavedState {
+    GLint draw_fb = 0, read_fb = 0, prog = 0, array = 0, elem = 0, active = 0, tex[4] = {}, viewport[4] = {};
+    GLint blend[4] = {GL_ONE, GL_ZERO, GL_ONE, GL_ZERO};  // src rgb, dst rgb, src alpha, dst alpha
+    GLboolean caps[5] = {}, color_mask[4] = {}, depth_mask = GL_TRUE;
+};
+constexpr GLenum kSavedCaps[5] = {GL_BLEND, GL_DEPTH_TEST, GL_CULL_FACE, GL_SCISSOR_TEST, GL_STENCIL_TEST};
 
-    for (GLenum cap : {GL_BLEND, GL_DEPTH_TEST, GL_CULL_FACE, GL_SCISSOR_TEST, GL_ALPHA_TEST, GL_FOG, GL_LIGHTING,
-                       GL_STENCIL_TEST, GL_COLOR_MATERIAL})
-        glDisable(cap);
+void save_state(SavedState& s) {
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &s.draw_fb);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &s.read_fb);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &s.prog);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &s.array);
+    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &s.elem);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &s.active);
+    for (int i = 0; i < 4; ++i) {
+        p_glActiveTexture(GL_TEXTURE0 + i);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &s.tex[i]);
+    }
+    glGetIntegerv(GL_VIEWPORT, s.viewport);
+    for (int i = 0; i < 5; ++i) s.caps[i] = glIsEnabled(kSavedCaps[i]);
+    glGetBooleanv(GL_COLOR_WRITEMASK, s.color_mask);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &s.depth_mask);
+    glGetIntegerv(GL_BLEND_SRC_RGB, &s.blend[0]);
+    glGetIntegerv(GL_BLEND_DST_RGB, &s.blend[1]);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &s.blend[2]);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &s.blend[3]);
+}
+
+void restore_state(const SavedState& s) {
+    p_glUseProgram(GLuint(s.prog));
+    for (int i = 0; i < 4; ++i) {
+        p_glActiveTexture(GL_TEXTURE0 + i);
+        glBindTexture(GL_TEXTURE_2D, GLuint(s.tex[i]));
+    }
+    p_glActiveTexture(GLenum(s.active));
+    glViewport(s.viewport[0], s.viewport[1], s.viewport[2], s.viewport[3]);
+    for (int i = 0; i < 5; ++i) {
+        if (s.caps[i]) glEnable(kSavedCaps[i]);
+        else glDisable(kSavedCaps[i]);
+    }
+    glColorMask(s.color_mask[0], s.color_mask[1], s.color_mask[2], s.color_mask[3]);
+    glDepthMask(s.depth_mask);
+    p_glBlendFuncSeparate(GLenum(s.blend[0]), GLenum(s.blend[1]), GLenum(s.blend[2]), GLenum(s.blend[3]));
+    p_glBindBuffer(GL_ARRAY_BUFFER, GLuint(s.array));
+    p_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, GLuint(s.elem));
+    p_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLuint(s.draw_fb));
+    p_glBindFramebuffer(GL_READ_FRAMEBUFFER, GLuint(s.read_fb));
+}
+
+void run(const Scene& sc, bool fixed_function) {
+    if (!active() || sc.w <= 0 || sc.h <= 0) return;
+    SavedState saved;
+    save_state(saved);
+#ifndef GANGSTAR_GLES
+    // Desktop fixed function: the attribute stacks also cover its extra state (fog, alpha test, lighting,
+    // texture enables and environments, the client arrays).
+    if (fixed_function) {
+        glPushAttrib(GL_ALL_ATTRIB_BITS);
+        glPushClientAttrib(GL_CLIENT_ALL_ATTRIB_BITS);
+        for (GLenum cap : {GL_ALPHA_TEST, GL_FOG, GL_LIGHTING, GL_COLOR_MATERIAL}) glDisable(cap);
+        // the fullscreen triangle comes from gl_VertexID; an enabled array would still be read (stale guest pointers)
+        for (GLenum a : {GL_VERTEX_ARRAY, GL_COLOR_ARRAY, GL_NORMAL_ARRAY, GL_TEXTURE_COORD_ARRAY}) glDisableClientState(a);
+    }
+#endif
+    if (!fixed_function)  // the shader renderer's attribute arrays (it re-enables them on its next draw)
+        for (GLuint i = 0; i < 8; ++i) p_glDisableVertexAttribArray(i);
+    for (GLenum cap : kSavedCaps) glDisable(cap);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDepthMask(GL_FALSE);
-    // No client arrays: the fullscreen triangle comes from gl_VertexID, and an enabled array would
-    // still be read (stale guest pointers).
-    for (GLenum a : {GL_VERTEX_ARRAY, GL_COLOR_ARRAY, GL_NORMAL_ARRAY, GL_TEXTURE_COORD_ARRAY}) glDisableClientState(a);
     p_glBindBuffer(GL_ARRAY_BUFFER, 0);
     p_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 
@@ -553,7 +592,10 @@ void run(const Scene& sc) {
             // ground fog / sun haze
             float inv_view[16];
             const bool have_view = sc.view_valid && invert4(sc.view, inv_view);
-            const bool fog = g_set.height_fog && g_set.height_fog_amount > 0 && have_view;
+            // ground fog needs the player near the camera (its feet = the street level)
+            const bool player_near = g_player_valid && have_view &&
+                                     std::hypot(inv_view[12] - g_player[0], inv_view[13] - g_player[1]) < 5000.0f;
+            const bool fog = g_set.height_fog && g_set.height_fog_amount > 0 && player_near;
             if (have_view) {
                 p_glUniformMatrix4fv(uni(p, "u_inv_view"), 1, GL_FALSE, inv_view);
                 p_glUniformMatrix4fv(uni(p, "u_view"), 1, GL_FALSE, sc.view);
@@ -622,7 +664,7 @@ void run(const Scene& sc) {
                 // warm haze only when the time-of-day colour is warm (sunrise / sunset)
                 const float warm = std::clamp((sc.fog_color[0] - sc.fog_color[2]) * 4.0f, 0.0f, 1.0f);
                 p_glUniform1f(uni(p, "u_sun_warm"), warm);
-                p_glUniform4f(uni(p, "u_hf"), kFogDensity, kFogFalloff, inv_view[14] - kFogRefBelowCamera,
+                p_glUniform4f(uni(p, "u_hf"), kFogDensity, kFogFalloff, g_player[2] + kFogRefAboveGround,
                               std::clamp(g_set.height_fog_amount, 0.0f, 2.0f));
                 static int logged = 0;
                 if (logged++ % 1000 == 999)
@@ -637,13 +679,13 @@ void run(const Scene& sc) {
         }
     }
 
-    p_glUseProgram(GLuint(prev_prog));
-    glPopClientAttrib();
-    glPopAttrib();
-    p_glBindBuffer(GL_ARRAY_BUFFER, GLuint(prev_array));
-    p_glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, GLuint(prev_elem));
-    p_glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLuint(prev_draw));
-    p_glBindFramebuffer(GL_READ_FRAMEBUFFER, GLuint(prev_read));
+#ifndef GANGSTAR_GLES
+    if (fixed_function) {
+        glPopClientAttrib();
+        glPopAttrib();
+    }
+#endif
+    restore_state(saved);
 }
 
 }  // namespace post

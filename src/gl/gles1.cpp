@@ -17,6 +17,8 @@
 #include <vector>
 
 #include "core/log.h"
+#include "gl/ffp.h"
+#include "gl/glmath.h"
 #include "gl/post.h"
 #include "rt/runtime.h"
 
@@ -178,9 +180,17 @@ Mat4 mul(const Mat4& a, const Mat4& b) {  // column-major, a * b
         }
     return r;
 }
+// Renderer: false = the game's fixed-function calls go to desktop GL's fixed-function pipeline;
+// true = they are emulated in shaders (gl/ffp, the GLES 3 path used on Android).
+bool g_shader = false;
+GLenum g_client_tex = GL_TEXTURE0;  // glClientActiveTexture
+int active_unit();                  // glActiveTexture (defined with the texture state below)
+
 GLenum g_matrix_mode = GL_MODELVIEW;
 std::vector<Mat4> g_proj{kIdentity}, g_mv{kIdentity};  // matrix stacks (top = current)
+std::vector<Mat4> g_texm[ffp::kUnits] = {{kIdentity}, {kIdentity}, {kIdentity}};  // texture matrices per unit
 std::vector<Mat4>* matrix_stack() {
+    if (g_matrix_mode == GL_TEXTURE) return active_unit() < ffp::kUnits ? &g_texm[active_unit()] : nullptr;
     return g_matrix_mode == GL_PROJECTION ? &g_proj : g_matrix_mode == GL_MODELVIEW ? &g_mv : nullptr;
 }
 bool g_fog_on = false, g_depth_test = false, g_lighting = false, g_blend = false, g_depth_write = true;
@@ -273,11 +283,30 @@ const void* array_ptr(Cpu& c, uint32_t p, bool bound) {
 }
 
 // ---- state -----------------------------------------------------------------------------------------
-H(enable) { GLenum cap = a.u32(); track_cap(cap, true); glEnable(cap); }
-H(disable) { GLenum cap = a.u32(); track_cap(cap, false); glDisable(cap); }
-H(enable_cs) { glEnableClientState(a.u32()); }
-H(disable_cs) { glDisableClientState(a.u32()); }
-H(alpha_func) { GLenum f = a.u32(); float r = a.f32(); glAlphaFunc(f, r); }
+void set_cap(GLenum cap, bool on) {
+    track_cap(cap, on);
+    if (g_shader && cap == GL_FOG) ffp::set_fog_forced(false);  // the game's own fog call wins (as in GL)
+    if (g_shader && ffp::is_ffp_cap(cap)) ffp::enable(cap, on, active_unit());
+    else if (on) glEnable(cap);
+    else glDisable(cap);
+}
+H(enable) { set_cap(a.u32(), true); }
+H(disable) { set_cap(a.u32(), false); }
+H(enable_cs) {
+    GLenum arr = a.u32();
+    if (g_shader) ffp::client_state(arr, true, int(g_client_tex - GL_TEXTURE0));
+    else glEnableClientState(arr);
+}
+H(disable_cs) {
+    GLenum arr = a.u32();
+    if (g_shader) ffp::client_state(arr, false, int(g_client_tex - GL_TEXTURE0));
+    else glDisableClientState(arr);
+}
+H(alpha_func) {
+    GLenum f = a.u32(); float r = a.f32();
+    if (g_shader) ffp::alpha_func(f, r);
+    else glAlphaFunc(f, r);
+}
 H(blend_func) { GLenum s = a.u32(), d = a.u32(); g_blend_dst = d; glBlendFunc(s, d); }
 H(blend_equation) { p_glBlendEquation(a.u32()); }
 H(color_mask) { GLboolean r = GLboolean(a.u32()), g = GLboolean(a.u32()), b = GLboolean(a.u32()), al = GLboolean(a.u32()); glColorMask(r, g, b, al); }
@@ -294,18 +323,31 @@ H(depth_rangef) {
 }
 H(polygon_offset) { float f = a.f32(), u = a.f32(); glPolygonOffset(f, u); }
 H(line_width) { glLineWidth(float(a.f32() * ky())); }
-H(point_size) { glPointSize(float(a.f32() * ky())); }
-H(point_param_f) {
+H(point_size) {
+    const float s = float(a.f32() * ky());
+    if (g_shader) ffp::point_size(s);
+    else glPointSize(s);
+}
+H(point_param_f) {  // size limits / attenuation: not emulated in shader mode (fixed sizes)
     GLenum p = a.u32(); float v = a.f32();
     if (p == GL_POINT_SIZE_MIN || p == GL_POINT_SIZE_MAX) v = float(v * ky());
-    p_glPointParameterf(p, v);
+    if (!g_shader) p_glPointParameterf(p, v);
 }
-H(point_param_fv) { GLenum p = a.u32(); p_glPointParameterfv(p, static_cast<const GLfloat*>(host(c, a.u32()))); }
+H(point_param_fv) {
+    GLenum p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32()));
+    if (!g_shader) p_glPointParameterfv(p, v);
+}
 H(sample_coverage) { float v = a.f32(); GLboolean inv = GLboolean(a.u32()); p_glSampleCoverage(v, inv); }
 H(scissor) { for (GLint& v : g_scissor) v = a.s32(); apply_scissor(); }
 H(viewport) { for (GLint& v : g_viewport) v = a.s32(); apply_viewport(); }
-H(shade_model) { glShadeModel(a.u32()); }
-H(hint) { GLenum t = a.u32(), m = a.u32(); glHint(t, m); }
+H(shade_model) {
+    GLenum m = a.u32();
+    if (!g_shader) glShadeModel(m);  // shader mode: always smooth (the game never asks for flat)
+}
+H(hint) {
+    GLenum t = a.u32(), m = a.u32();
+    if (!g_shader || t == GL_GENERATE_MIPMAP_HINT) glHint(t, m);  // the only GLES 1 hint GLES 3 still has
+}
 H(stencil_func) { GLenum f = a.u32(); GLint r = a.s32(); GLuint m = a.u32(); glStencilFunc(f, r, m); }
 H(stencil_mask) { glStencilMask(a.u32()); }
 H(stencil_op) { GLenum f = a.u32(), zf = a.u32(), zp = a.u32(); glStencilOp(f, zf, zp); }
@@ -320,9 +362,19 @@ H(clear_color) { float r = a.f32(), g = a.f32(), b = a.f32(), al = a.f32(); glCl
 H(clear_depthf) { glClearDepth(a.f32()); }
 H(clear_stencil) { glClearStencil(a.s32()); }
 H(flush) { glFlush(); }
+using glmath::invert4;
 H(clip_planef) {
     GLenum p = a.u32();
     const float* e = static_cast<const float*>(host(c, a.u32()));
+    if (g_shader) {
+        // GL stores the plane in eye space: plane x inverse(modelview at the time of the call).
+        float inv[16];
+        if (!invert4(g_mv.back().m, inv)) return;
+        float eye[4];
+        for (int i = 0; i < 4; ++i) eye[i] = e[0] * inv[i * 4] + e[1] * inv[i * 4 + 1] + e[2] * inv[i * 4 + 2] + e[3] * inv[i * 4 + 3];
+        ffp::clip_plane(int(p - GL_CLIP_PLANE0), eye);
+        return;
+    }
     const double d[4] = {e[0], e[1], e[2], e[3]};
     glClipPlane(p, d);
 }
@@ -346,6 +398,8 @@ H(get_integerv) {
     GLenum p = a.u32();
     GLint* out = static_cast<GLint*>(const_cast<void*>(host(c, a.u32())));
     if (p == GL_FRAMEBUFFER_BINDING) { *out = GLint(g_game_fb); return; }
+    if (p == GL_MAX_TEXTURE_UNITS && g_shader) { *out = ffp::kUnits; return; }
+    if (p == GL_MATRIX_MODE) { *out = GLint(g_matrix_mode); return; }
     if (p == GL_MAX_TEXTURE_UNITS && tint_unit() > 0) {  // the last unit is the time-of-day tint's
         glGetIntegerv(p, out);
         *out = std::min(*out, GLint(tint_unit()));
@@ -364,19 +418,27 @@ H(get_floatv) {
         for (int i = 0; i < 4; ++i) out[i] = float(p == GL_VIEWPORT ? g_viewport[i] : g_scissor[i]);
         return;
     }
+    // matrices from the shadow stacks (shader mode has none in GL)
+    if (p == GL_MODELVIEW_MATRIX || p == GL_PROJECTION_MATRIX || p == GL_TEXTURE_MATRIX) {
+        const std::vector<Mat4>& s = p == GL_MODELVIEW_MATRIX ? g_mv : p == GL_PROJECTION_MATRIX ? g_proj
+                                   : g_texm[std::min(active_unit(), ffp::kUnits - 1)];
+        std::memcpy(out, s.back().m, sizeof(Mat4));
+        return;
+    }
     glGetFloatv(p, out);
 }
 
 // ---- fixed-function pipeline ---------------------------------------------------------------------
-H(matrix_mode) { g_matrix_mode = a.u32(); glMatrixMode(g_matrix_mode); }
+// Matrices live in the shadow stacks; shader mode passes them per draw instead of to GL.
+H(matrix_mode) { g_matrix_mode = a.u32(); if (!g_shader) glMatrixMode(g_matrix_mode); }
 H(load_identity) {
     if (auto* s = matrix_stack()) s->back() = kIdentity;
-    glLoadIdentity();
+    if (!g_shader) glLoadIdentity();
 }
 H(load_matrixf) {
     const GLfloat* m = static_cast<const GLfloat*>(host(c, a.u32()));
     if (auto* s = matrix_stack()) std::memcpy(s->back().m, m, sizeof(Mat4));
-    glLoadMatrixf(m);
+    if (!g_shader) glLoadMatrixf(m);
 }
 H(mult_matrixf) {
     const GLfloat* m = static_cast<const GLfloat*>(host(c, a.u32()));
@@ -385,20 +447,32 @@ H(mult_matrixf) {
         std::memcpy(b.m, m, sizeof b);
         s->back() = mul(s->back(), b);
     }
-    glMultMatrixf(m);
+    if (!g_shader) glMultMatrixf(m);
 }
 H(push_matrix) {
     if (auto* s = matrix_stack()) s->push_back(s->back());
-    glPushMatrix();
+    if (!g_shader) glPushMatrix();
 }
 H(pop_matrix) {
     if (auto* s = matrix_stack(); s && s->size() > 1) s->pop_back();
-    glPopMatrix();
+    if (!g_shader) glPopMatrix();
 }
-H(color4f) { float r = a.f32(), g = a.f32(), b = a.f32(), al = a.f32(); glColor4f(r, g, b, al); }
-H(color4ub) { GLubyte r = GLubyte(a.u32()), g = GLubyte(a.u32()), b = GLubyte(a.u32()), al = GLubyte(a.u32()); glColor4ub(r, g, b, al); }
-H(normal3f) { float x = a.f32(), y = a.f32(), z = a.f32(); glNormal3f(x, y, z); }
-H(multi_texcoord4f) { GLenum t = a.u32(); float s = a.f32(), u = a.f32(), r = a.f32(), q = a.f32(); p_glMultiTexCoord4f(t, s, u, r, q); }
+H(color4f) {
+    float r = a.f32(), g = a.f32(), b = a.f32(), al = a.f32();
+    if (g_shader) ffp::color(r, g, b, al);
+    else glColor4f(r, g, b, al);
+}
+H(color4ub) {
+    GLubyte r = GLubyte(a.u32()), g = GLubyte(a.u32()), b = GLubyte(a.u32()), al = GLubyte(a.u32());
+    if (g_shader) ffp::color(r / 255.0f, g / 255.0f, b / 255.0f, al / 255.0f);
+    else glColor4ub(r, g, b, al);
+}
+H(normal3f) { float x = a.f32(), y = a.f32(), z = a.f32(); if (!g_shader) glNormal3f(x, y, z); }
+H(multi_texcoord4f) {
+    GLenum t = a.u32(); float s = a.f32(), u = a.f32(), r = a.f32(), q = a.f32();
+    if (g_shader) ffp::multi_texcoord(int(t - GL_TEXTURE0), s, u, r, q);
+    else p_glMultiTexCoord4f(t, s, u, r, q);
+}
 // GANGSTAR_GL_LIGHT_TRACE=1: log each distinct lighting/fog/texenv call once (day/night debugging).
 void light_trace(const char* fn, GLenum a, GLenum b, const float* v, int n) {
     static const bool on = [] { const char* e = std::getenv("GANGSTAR_GL_LIGHT_TRACE"); return e && *e && *e != '0'; }();
@@ -436,21 +510,27 @@ bool g_post_view_seen = false; // the camera view matrix was taken from a city d
 float g_fog_rgb[3] = {0.6f, 0.65f, 0.7f};
 float g_fog_density_now = 0;
 
+// One fog parameter to whichever pipeline is in use.
+void fog_param(GLenum p, float v) {
+    if (g_shader) ffp::fog(p, &v, 1);
+    else glFogf(p, v);
+}
 void apply_fog() {
     if (g_fog_cfg.atmospheric) {
         // exp(-(d*z)^2) = 3% at `far`: d*far = sqrt(-ln 0.03) = 1.873
         const float d = g_fog_cfg.strength <= 0 ? 0.0f : 1.873f * g_fog_cfg.strength / std::max(1.0f, g_fog_cfg.far_end);
         g_fog_density_now = d;
-        glFogi(GL_FOG_MODE, GL_EXP2);
-        glFogf(GL_FOG_DENSITY, d);
+        fog_param(GL_FOG_MODE, float(GL_EXP2));
+        fog_param(GL_FOG_DENSITY, d);
     } else {
         g_fog_density_now = 0;
-        glFogi(GL_FOG_MODE, g_game_fog.mode);
-        glFogf(GL_FOG_START, g_game_fog.start);
-        glFogf(GL_FOG_END, g_game_fog.end);
-        glFogf(GL_FOG_DENSITY, g_game_fog.density);
+        fog_param(GL_FOG_MODE, float(g_game_fog.mode));
+        fog_param(GL_FOG_START, g_game_fog.start);
+        fog_param(GL_FOG_END, g_game_fog.end);
+        fog_param(GL_FOG_DENSITY, g_game_fog.density);
     }
-    if (g_fog_radial) glFogi(kFogDistanceMode, g_fog_cfg.atmospheric ? kEyeRadial : kEyePlaneAbsolute);
+    // radial distance: the shader can always do it; desktop GL needs NV_fog_distance
+    if (g_shader || g_fog_radial) fog_param(kFogDistanceMode, float(g_fog_cfg.atmospheric ? kEyeRadial : kEyePlaneAbsolute));
 }
 // Records a distance parameter; true if atmospheric fog owns it (do not pass it to GL).
 bool game_fog_param(GLenum p, float v) {
@@ -477,7 +557,8 @@ void run_post() {
     std::memcpy(s.fog_color, g_fog_rgb, sizeof s.fog_color);
     s.fog_density = g_fog_density_now;
     trace_event("screen effects");
-    post::run(s);
+    post::run(s, !g_shader);
+    if (g_shader) ffp::invalidate();
 }
 void post_before_draw(GLuint tex0) {
     if (!on_screen()) return;
@@ -497,7 +578,9 @@ void post_before_draw(GLuint tex0) {
         s.tan_half_y = 1.0f / p.m[5];
         // City batches: normals, no colour array (people / cars / props have colour arrays), drawn in
         // world space, so their modelview is the camera's view.
-        if (!g_post_view_seen && (is_world_tex(tex0) || (glIsEnabled(GL_NORMAL_ARRAY) && !glIsEnabled(GL_COLOR_ARRAY)))) {
+        const bool normals = g_shader ? ffp::array_enabled(GL_NORMAL_ARRAY) : glIsEnabled(GL_NORMAL_ARRAY) != 0;
+        const bool colors = g_shader ? ffp::array_enabled(GL_COLOR_ARRAY) : glIsEnabled(GL_COLOR_ARRAY) != 0;
+        if (!g_post_view_seen && (is_world_tex(tex0) || (normals && !colors))) {
             std::memcpy(s.view, g_mv.back().m, sizeof s.view);
             s.view_valid = g_post_view_seen = true;
         }
@@ -513,7 +596,8 @@ void fog_before_draw() {
     const bool force = g_fog_cfg.atmospheric && g_fog_cfg.fog_everything && !g_fog_on && !g_blend && g_depth_test &&
                        g_depth_range_far < 0.999f && is_world_projection(g_proj.back());
     if (force == g_fog_forced) return;
-    if (force) glEnable(GL_FOG);
+    if (g_shader) ffp::set_fog_forced(force);
+    else if (force) glEnable(GL_FOG);
     else glDisable(GL_FOG);
     g_fog_forced = force;
 }
@@ -521,30 +605,48 @@ void fog_before_draw() {
 H(fogf) {
     GLenum p = a.u32(); float v = a.f32();
     light_trace("glFogf", p, 0, &v, 1);
-    if (!game_fog_param(p, v)) glFogf(p, v);
+    if (!game_fog_param(p, v)) fog_param(p, v);
 }
 H(fogfv) {
     GLenum p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32()));
     light_trace("glFogfv", p, 0, v, param_count(p));
     if (p == GL_FOG_COLOR) std::memcpy(g_fog_rgb, v, sizeof g_fog_rgb);
-    if (param_count(p) != 1 || !game_fog_param(p, v[0])) glFogfv(p, v);
+    if (param_count(p) != 1 || !game_fog_param(p, v[0])) {
+        if (g_shader) ffp::fog(p, v, param_count(p));
+        else glFogfv(p, v);
+    }
 }
-H(lightf) { GLenum l = a.u32(), p = a.u32(); float v = a.f32(); light_trace("glLightf", l, p, &v, 1); glLightf(l, p, v); }
-H(lightfv) { GLenum l = a.u32(), p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32())); light_trace("glLightfv", l, p, v, param_count(p)); glLightfv(l, p, v); }
-H(light_modelf) { GLenum p = a.u32(); float v = a.f32(); light_trace("glLightModelf", p, 0, &v, 1); glLightModelf(p, v); }
-H(light_modelfv) { GLenum p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32())); light_trace("glLightModelfv", p, 0, v, param_count(p)); glLightModelfv(p, v); }
-H(materialf) { GLenum f = a.u32(), p = a.u32(); float v = a.f32(); light_trace("glMaterialf", f, p, &v, 1); glMaterialf(f, p, v); }
-H(materialfv) { GLenum f = a.u32(), p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32())); light_trace("glMaterialfv", f, p, v, param_count(p)); glMaterialfv(f, p, v); }
-H(tex_envf) { GLenum t = a.u32(), p = a.u32(); float v = a.f32(); light_trace("glTexEnvf", t, p, &v, 1); glTexEnvf(t, p, v); }
-H(tex_envi) { GLenum t = a.u32(), p = a.u32(); GLint v = a.s32(); float fv = float(v); light_trace("glTexEnvi", t, p, &fv, 1); glTexEnvi(t, p, v); }
-H(tex_envfv) { GLenum t = a.u32(), p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32())); light_trace("glTexEnvfv", t, p, v, param_count(p)); glTexEnvfv(t, p, v); }
+// Lighting: the game sets lights and materials but never enables GL_LIGHTING; shader mode ignores them.
+H(lightf) { GLenum l = a.u32(), p = a.u32(); float v = a.f32(); light_trace("glLightf", l, p, &v, 1); if (!g_shader) glLightf(l, p, v); }
+H(lightfv) { GLenum l = a.u32(), p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32())); light_trace("glLightfv", l, p, v, param_count(p)); if (!g_shader) glLightfv(l, p, v); }
+H(light_modelf) { GLenum p = a.u32(); float v = a.f32(); light_trace("glLightModelf", p, 0, &v, 1); if (!g_shader) glLightModelf(p, v); }
+H(light_modelfv) { GLenum p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32())); light_trace("glLightModelfv", p, 0, v, param_count(p)); if (!g_shader) glLightModelfv(p, v); }
+H(materialf) { GLenum f = a.u32(), p = a.u32(); float v = a.f32(); light_trace("glMaterialf", f, p, &v, 1); if (!g_shader) glMaterialf(f, p, v); }
+H(materialfv) { GLenum f = a.u32(), p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32())); light_trace("glMaterialfv", f, p, v, param_count(p)); if (!g_shader) glMaterialfv(f, p, v); }
+H(tex_envf) {
+    GLenum t = a.u32(), p = a.u32(); float v = a.f32();
+    light_trace("glTexEnvf", t, p, &v, 1);
+    if (g_shader) ffp::tex_env(active_unit(), t, p, &v, 1);
+    else glTexEnvf(t, p, v);
+}
+H(tex_envi) {
+    GLenum t = a.u32(), p = a.u32(); GLint v = a.s32(); float fv = float(v);
+    light_trace("glTexEnvi", t, p, &fv, 1);
+    if (g_shader) ffp::tex_env(active_unit(), t, p, &fv, 1);
+    else glTexEnvi(t, p, v);
+}
+H(tex_envfv) {
+    GLenum t = a.u32(), p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32()));
+    light_trace("glTexEnvfv", t, p, v, param_count(p));
+    if (g_shader) ffp::tex_env(active_unit(), t, p, v, param_count(p));
+    else glTexEnvfv(t, p, v);
+}
 
 // ---- vertex arrays and drawing ---------------------------------------------------------------------
 // Frame trace of 2D draws: the client arrays (guest pointers) and texture sizes, to print each draw's
 // vertex / texture coordinate bounds (debugging HUD sprites, e.g. the clipped radio box).
 struct ArrayDbg { GLint size = 0; GLenum type = 0; GLsizei stride = 0; uint32_t ptr = 0; GLuint buf = 0; };
 ArrayDbg g_dbg_vtx, g_dbg_tc;
-GLenum g_client_tex = GL_TEXTURE0;
 std::unordered_map<GLuint, std::pair<int, int>> g_dbg_tex_size;
 float dbg_component(Cpu& c, const ArrayDbg& d, uint32_t i, int k) {
     const int sz = d.type == GL_FLOAT || d.type == GL_FIXED ? 4 : d.type == GL_SHORT ? 2 : 1;
@@ -647,17 +749,31 @@ void glow_capture(Cpu& c, GLenum mode, GLint first, GLsizei n, GLenum itype, uin
 H(vertex_pointer) {
     GLint s = a.s32(); GLenum t = a.u32(); GLsizei st = a.s32(); uint32_t p = a.u32();
     g_dbg_vtx = {s, t, st, p, g_array_buffer};
-    glVertexPointer(s, t, st, array_ptr(c, p, g_array_buffer));
+    if (g_shader) ffp::vertex_pointer({s, t, st, array_ptr(c, p, g_array_buffer), g_array_buffer});
+    else glVertexPointer(s, t, st, array_ptr(c, p, g_array_buffer));
 }
 H(texcoord_pointer) {
     GLint s = a.s32(); GLenum t = a.u32(); GLsizei st = a.s32(); uint32_t p = a.u32();
     if (g_client_tex == GL_TEXTURE0) g_dbg_tc = {s, t, st, p, g_array_buffer};
-    glTexCoordPointer(s, t, st, array_ptr(c, p, g_array_buffer));
+    if (g_shader) ffp::texcoord_pointer(int(g_client_tex - GL_TEXTURE0), {s, t, st, array_ptr(c, p, g_array_buffer), g_array_buffer});
+    else glTexCoordPointer(s, t, st, array_ptr(c, p, g_array_buffer));
 }
-H(color_pointer) { GLint s = a.s32(); GLenum t = a.u32(); GLsizei st = a.s32(); glColorPointer(s, t, st, array_ptr(c, a.u32(), g_array_buffer)); }
-H(normal_pointer) { GLenum t = a.u32(); GLsizei st = a.s32(); glNormalPointer(t, st, array_ptr(c, a.u32(), g_array_buffer)); }
-H(client_active_texture) { g_client_tex = a.u32(); p_glClientActiveTexture(g_client_tex); }
+H(color_pointer) {
+    GLint s = a.s32(); GLenum t = a.u32(); GLsizei st = a.s32(); uint32_t p = a.u32();
+    if (g_shader) ffp::color_pointer({s, t, st, array_ptr(c, p, g_array_buffer), g_array_buffer});
+    else glColorPointer(s, t, st, array_ptr(c, p, g_array_buffer));
+}
+H(normal_pointer) {  // normals only matter for GL lighting, which the game never turns on
+    GLenum t = a.u32(); GLsizei st = a.s32(); uint32_t p = a.u32();
+    if (!g_shader) glNormalPointer(t, st, array_ptr(c, p, g_array_buffer));
+}
+H(client_active_texture) { g_client_tex = a.u32(); if (!g_shader) p_glClientActiveTexture(g_client_tex); }
 GLuint bound_tex0();
+extern GLuint g_bound_2d[8];
+ffp::DrawState draw_state() {
+    return {g_proj.back().m, g_mv.back().m, {g_texm[0].back().m, g_texm[1].back().m, g_texm[2].back().m}, g_bound_2d,
+            g_array_buffer};
+}
 H(draw_arrays) {
     GLenum m = a.u32(); GLint f = a.s32(); GLsizei n = a.s32();
     trace_draw(bound_tex0(), n);
@@ -666,7 +782,8 @@ H(draw_arrays) {
     glow_capture(c, m, f, n, 0, 0);
     tint_before_draw();
     fog_before_draw();
-    glDrawArrays(m, f, n);
+    if (g_shader) ffp::draw_arrays(m, f, n, draw_state());
+    else glDrawArrays(m, f, n);
     ++g_draws;
 }
 H(draw_elements) {
@@ -677,7 +794,8 @@ H(draw_elements) {
     if (!g_element_buffer) glow_capture(c, m, 0, n, t, ip);
     tint_before_draw();
     fog_before_draw();
-    glDrawElements(m, n, t, array_ptr(c, ip, g_element_buffer));
+    if (g_shader) ffp::draw_elements(m, n, t, array_ptr(c, ip, g_element_buffer), draw_state());
+    else glDrawElements(m, n, t, array_ptr(c, ip, g_element_buffer));
     ++g_draws;
 }
 
@@ -820,7 +938,7 @@ bool is_actor_draw() {
 }
 
 void tint_before_draw() {
-    if (g_tint_unit < 0) return;
+    if (g_tint_unit < 0 && !g_shader) return;
     const float* col = nullptr;
     if (auto it = g_world_tex.find(g_bound_2d[0]); it != g_world_tex.end()) {
         if (it->second == WorldTex::Day) col = g_tint;
@@ -828,6 +946,10 @@ void tint_before_draw() {
         col = g_actor_tint;
     }
     if (col && is_identity(col)) col = nullptr;
+    if (g_shader) {  // a shader uniform instead of the extra texture stage
+        ffp::set_tint(col);
+        return;
+    }
     const bool want = col != nullptr;
     const bool recolor = want && std::memcmp(col, g_stage_color, sizeof g_stage_color) != 0;
     if (want == g_tint_on && !recolor) return;
@@ -870,6 +992,7 @@ H(delete_textures) {
     for (GLsizei i = 0; i < n; ++i) {
         if (g_tex_observer.on_delete) g_tex_observer.on_delete(ids[i]);
         g_tex_filters.erase(ids[i]);
+        ffp::forget_texture(ids[i]);
         for (GLuint& b : g_bound_2d)
             if (b == ids[i]) b = 0;
     }
@@ -906,6 +1029,7 @@ H(tex_image_2d) {
     GLenum t = a.u32(); GLint l = a.s32(), ifmt = a.s32(); GLsizei w = a.s32(), h = a.s32(); GLint b = a.s32();
     GLenum f = a.u32(), ty = a.u32();
     if (l == 0) g_dbg_tex_size[bound_tex0()] = {w, h};
+    if (l == 0 && t == GL_TEXTURE_2D) ffp::set_texture_format(g_bound_2d[g_unit], f);
     glTexImage2D(t, l, ifmt, w, h, b, f, ty, host(c, a.u32()));
 }
 H(tex_subimage_2d) {
@@ -918,6 +1042,8 @@ H(compressed_tex_image_2d) {
     GLsizei n = a.s32();
     const void* data = host(c, a.u32());
     if (l == 0) g_dbg_tex_size[bound_tex0()] = {w, h};
+    if (l == 0 && t == GL_TEXTURE_2D)  // DXT1 without alpha and ETC1 are RGB; the rest has alpha
+        ffp::set_texture_format(g_bound_2d[g_unit], ifmt == 0x83F0 || ifmt == 0x8D64 ? GL_RGB : GL_RGBA);
     p_glCompressedTexImage2D(t, l, ifmt, w, h, b, n, data);
     if (t == GL_TEXTURE_2D && g_tex_observer.on_compressed_upload)
         g_tex_observer.on_compressed_upload(g_bound_2d[g_unit], l, ifmt, w, h, static_cast<const uint8_t*>(data), n);
@@ -930,6 +1056,7 @@ H(compressed_tex_subimage_2d) {
 H(copy_tex_image_2d) {
     GLenum t = a.u32(); GLint l = a.s32(); GLenum ifmt = a.u32(); GLint x = a.s32(), y = a.s32();
     GLsizei w = a.s32(), h = a.s32(); GLint b = a.s32();
+    if (l == 0 && t == GL_TEXTURE_2D) ffp::set_texture_format(g_bound_2d[g_unit], ifmt);
     if (!on_screen()) return glCopyTexImage2D(t, l, ifmt, x, y, w, h, b);
     // Copy from the high-resolution screen: the texture gets the internal pixels (sharper effects);
     // texture coordinates are normalised, so the game is unaffected.
@@ -991,13 +1118,21 @@ bool load_gl() {
     if (!p_##name) { LOG("GL: missing entry point %s", #name); ok = false; }
     GL_EXT_FUNCS(LOAD)
 #undef LOAD
-    if (ok) tint_init();
+    if (g_shader && !(ok && ffp::init())) {
+        LOG("GL: shader renderer unavailable, using the fixed-function pipeline");
+        g_shader = false;
+    }
+    LOG("GL: renderer: %s", g_shader ? "shaders (GLES 3 style fixed-function emulation)" : "OpenGL fixed function");
+    if (ok && !g_shader) tint_init();
     const char* ext = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
     g_fog_radial = ext && std::strstr(ext, "GL_NV_fog_distance");
     LOG("GL: fog distance %s", g_fog_radial ? "radial (NV_fog_distance)" : "by depth plane");
     if (ok) post::init();  // settings come from the game (post::set_settings)
     return ok;
 }
+
+void set_shader_renderer(bool on) { g_shader = on; }
+bool shader_renderer() { return g_shader; }
 
 void set_fog(const FogConfig& f) {
     if (f.atmospheric == g_fog_cfg.atmospheric && f.far_end == g_fog_cfg.far_end && f.strength == g_fog_cfg.strength &&
@@ -1176,7 +1311,10 @@ void vfb_present(int win_w, int win_h, Fit fit, bool linear, int* rx, int* ry, i
     // Leave framebuffer 0 (the window) bound for overlay drawing; vfb_restore_binding() rebinds the game's.
 }
 
-void vfb_restore_binding() { bind_game_fb(); }
+void vfb_restore_binding() {
+    bind_game_fb();
+    if (g_shader) ffp::invalidate();  // the overlay drew with its own program in between
+}
 
 void draw_overlay_rects(int win_w, int win_h, const OverlayRect* rects, int n) {
     GLint sb[4];

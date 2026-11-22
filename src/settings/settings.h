@@ -21,6 +21,7 @@ struct Settings {
     bool low_latency = true;                // wait for the GPU after each frame so frames never queue up
 
     // [graphics]
+    std::string renderer = "gl";            // gl (desktop fixed function) | shader (the GLES 3 renderer Android uses); restart
     std::string quality = "high";           // phone (game's own pick = profile 1, untouched) | low (fastest) | high | ultra (more NPCs)
     bool mipmaps = true;                    // the phone profile turned them off
     float draw_distance = 3.0f;             // 0.5..8, live: multiplier on the detailed-city radius (where the low-detail city starts) and the far city

@@ -1120,6 +1120,39 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
 - Debug: `GANGSTAR_POST_TEST=invert` (3D scene inverted, HUD untouched: verified) and `=depth`
   (eye distance reconstructed from depth, both ranges: verified continuous).
 
+### 5B Android (started 2026-11-22, Q10)
+- Toolchain installed (owner allowed installs): Android SDK at `C:\Users\aiden\devtools\android-sdk`
+  (cmdline-tools latest, platform-tools, platforms;android-34, build-tools;34.0.0,
+  ndk;27.2.12479018 = r27c, cmake;3.22.1), JDK 21 at `C:\Users\aiden\devtools\jdk-21.0.13+9`.
+  Licences were accepted through `cmd /c "sdkmanager --licenses < yes.txt"` (piping from PowerShell
+  into the .bat does not reach it).
+- No accelerated emulator: the CPU supports virtualization, but Hyper-V / Windows Hypervisor
+  Platform is off and turning it on needs a reboot; the AMD emulator driver needs admin rights.
+  Neither can be done unattended, so device testing is the owner's (Retroid / Odin), and the new
+  renderer is developed and checked on Windows first (same shaders, desktop GL).
+- Renderer decision (owner: "whatever works best for Snapdragon and Mali"): GLES 3.0 with the
+  game's fixed-function GLES 1.1 state emulated in shaders (`src/gl/ffp`). GLES 3.0 is on every
+  current Adreno and Mali, it keeps the screen effects, and the same code runs on Windows for
+  testing. Vulkan / ANGLE can come later behind the same state layer if measurements on a device
+  call for it.
+- **Step 1 done: the shader renderer** (`src/gl/ffp.{h,cpp}`, `[graphics] renderer = shader`,
+  desktop default stays `gl`). The bridge sends every fixed-function call to ffp in shader mode
+  (enable/disable of fixed-function caps, client arrays and pointers, current colour / texcoord,
+  texture environments, alpha test, fog, clip planes, point size); matrices come from the shadow
+  stacks (texture matrices now shadowed too) per draw; generic GL state still goes to GL. One
+  program: per-unit texture environment (all GLES 1.1 modes incl. COMBINE, by texture base format:
+  ALPHA / LUMINANCE / RGB textures follow the spec's table), the time-of-day tint as a uniform
+  instead of the extra texture stage, alpha test, fog (linear / exp / exp2, radial), 2 clip planes,
+  point sprites; uniforms cached between draws. GL_MAX_TEXTURE_UNITS answers 3, matrix queries come
+  from the shadows. Screen effects save / restore GLES 3 state by hand in shader mode (blend function
+  included) and the attribute arrays are disabled around them. Lighting is not emulated (never enabled).
+- Verified on Windows: main menu, noon, sunset (17:40) and night (23:30, night textures, neon,
+  dynamic lights, bloom) look the same as the desktop fixed-function renderer; 120 fps capped.
+- Found on the way (both renderers): the ground fog washed out the main-menu scene, whose camera
+  is ~30 m above its ground; the fog height now comes from the player's feet, and there is no ground
+  fog without a player near the camera. The effects' camera-view pick read client-array state from
+  GL, which shader mode does not set; it asks ffp now.
+
 ### 5C.6 Dynamic lights (done 2026-11-22, Q9)
 - The game draws every light it shows as additive sprites from one light-effects atlas (texture 92 in
   this session, 512²: neon tubes, coloured glows, star flares, headlight / taillight / police

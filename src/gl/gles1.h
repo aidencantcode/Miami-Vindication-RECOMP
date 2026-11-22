@@ -12,6 +12,10 @@ namespace rt { class Runtime; }
 namespace gles1 {
 
 bool load_gl();                     // after a GL context is current
+// Renderer: emulate the game's fixed-function pipeline in shaders (the GLES 3 path, gl/ffp) instead
+// of using desktop GL's. Call before load_gl(); falls back to fixed function if shaders fail.
+void set_shader_renderer(bool on);
+bool shader_renderer();
 void register_handlers(rt::Runtime& rt);
 uint64_t draw_calls();              // statistics
 void report();

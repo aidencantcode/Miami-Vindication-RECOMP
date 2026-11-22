@@ -52,7 +52,12 @@ void set_settings(const Settings& s);
 void set_time_of_day(int minute);
 // A muzzle flash at a world position: a short orange light (dynamic lights on).
 void flash(float x, float y, float z);
+// The player's position (feet): its height is the reference for the ground fog. No player, or one
+// far from the camera (menu scenes) = no ground fog.
+void set_player(bool valid, const float pos[3]);
 bool active();                      // any pass is on (else run() does nothing)
-void run(const Scene& scene);
+// fixed_function: the game draws with desktop GL's fixed-function pipeline, whose extra state is saved
+// with the attribute stacks; otherwise (shader renderer, GLES 3) only the state GLES 3 has is saved.
+void run(const Scene& scene, bool fixed_function);
 
 }  // namespace post

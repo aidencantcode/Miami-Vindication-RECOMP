@@ -150,6 +150,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     SDL_GLContext ctx = SDL_GL_CreateContext(win);
     if (!ctx) FATAL("SDL_GL_CreateContext: %s", SDL_GetError());
     SDL_GL_SetSwapInterval(cfg.vsync ? 1 : 0);
+    gles1::set_shader_renderer(cfg.renderer == "shader");
     if (!gles1::load_gl()) FATAL("required OpenGL entry points are missing");
     LOG("GL: %s / %s", glGetString(GL_RENDERER), glGetString(GL_VERSION));
 
@@ -465,6 +466,11 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 nighttex::update(cfg.night_textures, int(rt.mem().r32(daytime_obj + 4)),  // DayTime state, ms of day
                                 int(rt.mem().r32(daytime_obj + 8) / 60000), cfg.night_people_lift);
                 post::set_time_of_day(int(rt.mem().r32(daytime_obj + 8) / 60000));
+                {
+                    float pp[3] = {};
+                    const bool have_player = mods::player_position(cpu, pp);
+                    post::set_player(have_player, pp);
+                }
                 gles1::FogConfig fog;
                 fog.atmospheric = cfg.fog == "atmospheric";
                 fog.strength = cfg.fog_strength;

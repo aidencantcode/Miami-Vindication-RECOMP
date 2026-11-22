@@ -88,6 +88,8 @@ bool manual_aiming();
 void switch_weapon(int step);
 // Once per frame before the game runs (main CPU idle): weapon switches, auto-aim.
 void frame(cpu::Cpu& c, double dt);
+// The player's position (feet), false when there is no player (menus). Main CPU must be idle.
+bool player_position(cpu::Cpu& c, float out[3]);
 
 // The game's own time step since the last call: average ms per Application::_Update and count.
 bool take_step_stats(double* avg_step_ms, int* steps);
