@@ -515,6 +515,8 @@ constexpr GLenum kFogDistanceMode = 0x855A, kEyeRadial = 0x855B, kEyePlaneAbsolu
 post::Scene g_post_scene;
 bool g_post_pending = false;   // a 3D scene was drawn on screen this frame and has not been processed
 bool g_post_view_seen = false; // the camera view matrix was taken from a city draw this frame
+float g_cam_view[16];          // the engine camera's view (set_camera_view)
+bool g_cam_view_set = false;
 float g_fog_rgb[3] = {0.6f, 0.65f, 0.7f};
 float g_fog_density_now = 0;
 
@@ -588,9 +590,23 @@ void post_before_draw(GLuint tex0) {
         // world space, so their modelview is the camera's view.
         const bool normals = g_shader ? ffp::array_enabled(GL_NORMAL_ARRAY) : glIsEnabled(GL_NORMAL_ARRAY) != 0;
         const bool colors = g_shader ? ffp::array_enabled(GL_COLOR_ARRAY) : glIsEnabled(GL_COLOR_ARRAY) != 0;
-        if (!g_post_view_seen && (is_world_tex(tex0) || (normals && !colors))) {
+        if (!g_post_view_seen && g_cam_view_set) {
+            std::memcpy(s.view, g_cam_view, sizeof s.view);
+            s.view_valid = g_post_view_seen = true;
+        } else if (!g_post_view_seen && (is_world_tex(tex0) || (normals && !colors))) {
             std::memcpy(s.view, g_mv.back().m, sizeof s.view);
             s.view_valid = g_post_view_seen = true;
+        }
+        // GANGSTAR_CAM_TRACE=1: how often a city-looking draw's modelview differs from the camera
+        static const bool cam_trace = std::getenv("GANGSTAR_CAM_TRACE") != nullptr;
+        if (cam_trace && g_cam_view_set && (is_world_tex(tex0) || (normals && !colors))) {
+            float diff = 0;
+            for (int i = 0; i < 16; ++i) diff = std::max(diff, std::abs(g_mv.back().m[i] - g_cam_view[i]) / (i >= 12 ? 100.0f : 1.0f));
+            static int n = 0;
+            if (diff > 0.01f && n++ < 40)
+                LOG("cam-trace f%d: draw tex %u %s modelview differs from the camera by %.3f (mv t %.0f %.0f %.0f, cam t %.0f %.0f %.0f)",
+                    g_frame, tex0, is_world_tex(tex0) ? "world" : "normals", diff, g_mv.back().m[12], g_mv.back().m[13],
+                    g_mv.back().m[14], g_cam_view[12], g_cam_view[13], g_cam_view[14]);
         }
     } else if (!is_sky_draw()) {
         s.far_n = proj_near(p);
@@ -748,8 +764,10 @@ void glow_capture(Cpu& c, GLenum mode, GLint first, GLsizei n, GLenum itype, uin
     const Mat4& mv = g_mv.back();
     const Mat4& tm = g_texm[0].back();
     const bool uv_ok = g_dbg_tc.ptr && !g_dbg_tc.buf;
-    const bool world = s.view_valid && std::fabs(mv.m[12] - s.view[12]) + std::fabs(mv.m[13] - s.view[13]) +
-                                               std::fabs(mv.m[14] - s.view[14]) < 1.0f;
+    // city billboards are drawn with the camera's view as their modelview
+    const float* view = g_cam_view_set ? g_cam_view : s.view;
+    const bool world = (g_cam_view_set || s.view_valid) && std::fabs(mv.m[12] - view[12]) + std::fabs(mv.m[13] - view[13]) +
+                                                               std::fabs(mv.m[14] - view[14]) < 1.0f;
     const int draw = g_glow_draws++;
     const GLsizei group = mode == GL_TRIANGLES ? 6 : n;
     for (GLsizei q = 0; q + group <= n && s.glow_count < post::Scene::kMaxGlows; q += group) {
@@ -1235,6 +1253,11 @@ void set_shader_renderer(bool) { g_shader = true; }  // GLES 3 has no fixed-func
 void set_shader_renderer(bool on) { g_shader = on; }
 #endif
 bool shader_renderer() { return g_shader; }
+
+void set_camera_view(const float view[16]) {
+    std::memcpy(g_cam_view, view, sizeof g_cam_view);
+    g_cam_view_set = true;
+}
 
 void set_fog(const FogConfig& f) {
     if (f.atmospheric == g_fog_cfg.atmospheric && f.far_end == g_fog_cfg.far_end && f.strength == g_fog_cfg.strength &&

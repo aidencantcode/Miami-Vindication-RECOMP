@@ -95,6 +95,8 @@ HOOKABLE = {
     "_ZN6Weapon5shootEP9CharacterN6glitch4core8vector3dIfEES5_b",  # manual aim: shots to the crosshair
     "_ZN9Character3aimEb",  # manual aim: arm pose along the crosshair (Q3)
     "_ZN6glitch5scene22CSceneCollisionManager27getRayFromScreenCoordinatesENS_4core10position2dIiEEPNS0_16ICameraSceneNodeE",
+    # the engine camera's view matrix for the screen effects (fog, lights)
+    "_ZN6glitch5video14CFixedGLDriverINS0_15COpenGLESDriverEE12setTransformENS0_22E_TRANSFORMATION_STATEERKNS_4core8CMatrix4IfEE",
 }
 
 

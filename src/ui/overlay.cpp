@@ -194,6 +194,13 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
             ch |= combo_str("Window", &s.window_mode,
                             {{"windowed", "Windowed"}, {"borderless", "Borderless fullscreen"}, {"fullscreen", "Exclusive fullscreen"}});
             ch |= ImGui::Checkbox("VSync", &s.vsync);
+            if (s.vsync) {
+                ImGui::SameLine();
+                ch |= ImGui::Checkbox("Adaptive", &s.vsync_adaptive);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("A frame that misses the refresh is shown at once instead of waiting for the next one.\n"
+                                      "Keeps the frame rate up when the PC is just too slow, but those frames tear.");
+            }
             ch |= combo_int("FPS limit", &s.fps_limit,
                             {{-1, "Display refresh rate"}, {30, "30"}, {60, "60"}, {90, "90"}, {120, "120"}, {144, "144"},
                              {165, "165"}, {240, "240"},

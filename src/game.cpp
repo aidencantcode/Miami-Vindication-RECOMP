@@ -55,11 +55,11 @@ using Clock = std::chrono::steady_clock;
 
 namespace {
 
-// Vsync on = adaptive where the driver has it (a frame that misses the refresh is shown at once,
-// with a tear, instead of waiting for the next one: at 100 Hz a 10.5 ms frame stays ~95 fps rather
-// than dropping to 50), else classic vsync.
-void set_vsync(bool on) {
-    if (on && SDL_GL_SetSwapInterval(-1) == 0) {
+// Classic vsync never tears. Adaptive vsync (opt-in) shows a frame that misses the refresh at once,
+// with a tear, instead of waiting for the next one (at 100 Hz a 10.5 ms frame stays ~95 fps rather
+// than dropping to 50). The owner saw tearing with it on, so it is off by default.
+void set_vsync(bool on, bool adaptive) {
+    if (on && adaptive && SDL_GL_SetSwapInterval(-1) == 0) {
         LOG("display: adaptive vsync");
         return;
     }
@@ -182,7 +182,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     apply_window_mode(win, cfg);
     SDL_GLContext ctx = SDL_GL_CreateContext(win);
     if (!ctx) FATAL("SDL_GL_CreateContext: %s", SDL_GetError());
-    set_vsync(cfg.vsync);
+    set_vsync(cfg.vsync, cfg.vsync_adaptive);
     gles1::set_shader_renderer(cfg.renderer == "shader");
     if (!gles1::load_gl()) FATAL("required OpenGL entry points are missing");
     LOG("GL: %s / %s", glGetString(GL_RENDERER), glGetString(GL_VERSION));
@@ -496,9 +496,14 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 else
                     mods::set_touch_controls_hidden(cfg.touch_controls == "hide");
                 const auto t_game = Clock::now();
-                nighttex::update(cfg.night_textures, int(rt.mem().r32(daytime_obj + 4)),  // DayTime state, ms of day
-                                int(rt.mem().r32(daytime_obj + 8) / 60000), cfg.night_people_lift);
-                post::set_time_of_day(int(rt.mem().r32(daytime_obj + 8) / 60000));
+                // DayTime +8: the game clock, a 64-bit millisecond count that keeps running past midnight
+                // (DayTime::update adds to it; UpdateInfo takes it modulo the day). The low word alone
+                // stopped the sun at the first midnight.
+                const uint64_t clock_ms = uint64_t(rt.mem().r32(daytime_obj + 8)) | uint64_t(rt.mem().r32(daytime_obj + 12)) << 32;
+                const int minute_of_day = int((clock_ms / 60000) % 1440);
+                nighttex::update(cfg.night_textures, int(rt.mem().r32(daytime_obj + 4)),  // DayTime state
+                                minute_of_day, cfg.night_people_lift);
+                post::set_time_of_day(minute_of_day);
                 {
                     float pp[3] = {};
                     const bool have_player = mods::player_position(cpu, pp);
@@ -550,7 +555,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 stats.view_h = rh;
                 if (ui::draw(cfg, stats)) {
                     if (cfg.window_mode != before.window_mode) apply_window_mode(win, cfg);
-                    if (cfg.vsync != before.vsync) set_vsync(cfg.vsync);
+                    if (cfg.vsync != before.vsync || cfg.vsync_adaptive != before.vsync_adaptive) set_vsync(cfg.vsync, cfg.vsync_adaptive);
                     if (cfg.render_scale != before.render_scale || cfg.msaa != before.msaa || cfg.fit != before.fit) {
                         int iw, ih;
                         internal_size(cfg, kW, kH, dw, dh, &iw, &ih);

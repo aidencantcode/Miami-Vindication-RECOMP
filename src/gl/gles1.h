@@ -73,6 +73,12 @@ struct FogConfig {
 };
 void set_fog(const FogConfig& f);
 
+// The engine's camera (glitch CCameraSceneNode::render, hooked in game/mods): its view matrix (world
+// -> eye, column-major, exactly what the engine hands its driver). The screen effects take the view
+// that is current when the city is drawn, instead of guessing it from a draw's modelview (which picked
+// a boat's or a prop's matrix in some views: fog and lights then jumped with the camera angle).
+void set_camera_view(const float view[16]);
+
 // Texture filtering override (applied live to every texture whose filters the game set).
 enum class TextureFilter { Game, Nearest, Bilinear, Trilinear };
 void set_texture_filter(TextureFilter f);

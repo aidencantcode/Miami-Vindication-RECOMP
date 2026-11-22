@@ -11,6 +11,7 @@ struct Settings {
     std::string window_mode = "windowed";  // windowed | borderless | fullscreen
     int window_w = 1280, window_h = 720;    // windowed size
     bool vsync = true;
+    bool vsync_adaptive = false;            // vsync on: show a late frame at once (may tear) instead of waiting a refresh
     int fps_limit = -1;                     // -1 = display refresh rate, 0 = unlimited, else 30..360 (the phone ran ~30)
     std::string aspect = "auto";            // game width at 480 high: auto (window) | 4:3 | 5:3 | 16:10 | 16:9 | 21:9
     int render_scale = 0;                   // 0 = native (exactly the window), else 1..8 x 480p (supersampling)

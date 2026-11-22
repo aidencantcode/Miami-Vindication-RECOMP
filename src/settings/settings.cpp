@@ -47,6 +47,7 @@ const std::vector<Field>& fields() {
         F("display", "window_width", &Settings::window_w),
         F("display", "window_height", &Settings::window_h),
         F("display", "vsync", &Settings::vsync),
+        F("display", "vsync_adaptive", &Settings::vsync_adaptive),
         F("display", "fps_limit", &Settings::fps_limit),
         F("display", "aspect", &Settings::aspect),
         F("display", "render_scale", &Settings::render_scale),

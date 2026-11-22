@@ -10,6 +10,7 @@
 
 #include "core/layout.h"
 #include "core/log.h"
+#include "gl/gles1.h"
 #include "gl/post.h"
 #include "hle/overrides.h"
 #include "rt/runtime.h"
@@ -130,6 +131,7 @@ uint32_t g_trace_cam = 0;   // the Follow/VehicleCamera updated last (input trac
 // Physics step (see the Application::_Update hook): the literal-pool word in GS3DStuff::update.
 bool g_smooth_physics = true;
 std::vector<std::string> g_debug_cmds;  // scripted test commands (input "mod <name>"), run in frame()
+int g_pin_minute = -1;                   // GANGSTAR_TIME (and "mod time:HHMM"): the pinned game clock
 constexpr uint32_t kPhysicsStepLiteral = layout::kLibBase + 0x289dc0;
 constexpr uint32_t kPhysicsStep60 = 0x3c888889;  // 1/60 f, the game's value
 
@@ -250,12 +252,15 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
 
     // ---- time of day override (debugging the day/night look: GANGSTAR_TIME=HH:MM) -------------
     // Pins the game clock through its own DayTime::setTime before every DayTime::update.
+    // A test script can move the pinned time with "mod time:HHMM".
     if (const char* t = std::getenv("GANGSTAR_TIME")) {
         int h = 0, m = 0;
         std::sscanf(t, "%d:%d", &h, &m);
+        g_pin_minute = h * 60 + m;
         const uint32_t set_time = rt.lib_func("_ZN7DayTime7setTimeEii");
-        rt.hook_function("_ZN7DayTime6updateEd", {[set_time, h, m](cpu::Cpu& c) {
+        rt.hook_function("_ZN7DayTime6updateEd", {[set_time](cpu::Cpu& c) {
                              const uint32_t self = c.reg(cpu::R0);
+                             const int h = g_pin_minute / 60, m = g_pin_minute % 60;
                              c.call(set_time, {self, uint32_t(h), uint32_t(m)});
                              static int logged_state = -2;
                              auto& mem = c.rt().mem();
@@ -411,6 +416,29 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
             c.call(m.r32(vt + 0xa4), {node, scratch});        // setPosition
             c.call(m.r32(vt + 0x104), {node, scratch + 16});  // setTarget
         }});
+
+    // ---- the engine camera, for the screen effects ---------------------------------------------------
+    // The driver's CFixedGLDriver<COpenGLESDriver>::setTransform(this, state, const matrix&) gets
+    // every transform (decompiled: state 0 view, 1 world, 2 projection; 16 floats + a flag byte).
+    // CCameraSceneNode::render (which would hand it the camera's view) is never called in this game.
+    // The view is world -> eye in GL's column-major layout.
+    rt.hook_function("_ZN6glitch5video14CFixedGLDriverINS0_15COpenGLESDriverEE12setTransformENS0_22E_TRANSFORMATION_STATEERKNS_4core8CMatrix4IfEE",
+                     {[](cpu::Cpu& c) {
+                          const uint32_t state = c.reg(cpu::R1);
+                          if (state != 0 && state != 2) return false;
+                          float v[16];
+                          std::memcpy(v, c.rt().mem().ptr(c.reg(cpu::R2)), sizeof v);
+                          bool ok = true;
+                          for (float f : v) ok = ok && std::isfinite(f);
+                          if (ok && state == 0) gles1::set_camera_view(v);
+                          static const bool trace = std::getenv("GANGSTAR_CAM_TRACE") != nullptr;
+                          static int n = 0;
+                          if (trace && n++ < 40)
+                              LOG("cam-trace setTransform(%s) t %.0f %.0f %.0f row0 %.3f %.3f %.3f m10 %.4f m14 %.1f",
+                                  state ? "projection" : "view", v[12], v[13], v[14], v[0], v[4], v[8], v[10], v[14]);
+                          return false;
+                      },
+                      nullptr});
 
     // ---- debugging: where does the follow camera's yaw/pitch get pulled back? ----------------------
     if (std::getenv("GS_WATCH_CAMERA")) {
@@ -815,6 +843,22 @@ void frame(cpu::Cpu& c, double dt) {
             }
         } else if (cmd.rfind("drawdist", 0) == 0) {  // drawdist<x>, e.g. drawdist2.5
             set_draw_distance(float(std::atof(cmd.c_str() + 8)));
+        } else if (cmd.rfind("time:", 0) == 0) {  // time:HHMM (needs GANGSTAR_TIME, which installs the pin)
+            const int hm = std::atoi(cmd.c_str() + 5);
+            g_pin_minute = (hm / 100) * 60 + hm % 100;
+            LOG("test: time pinned to %02d:%02d", hm / 100, hm % 100);
+        } else if (cmd.rfind("tp:", 0) == 0 || cmd.rfind("tpr:", 0) == 0 || cmd == "where") {
+            // tp:x,y,z (world units, ~1 cm) or tpr:dx,dy,dz (from where the player stands); where: log it
+            c.call(m.r32(m.r32(p + 4) + 0x5c), {scratch, p + 4});  // LevelObject::getPosition (feet)
+            float pos[3] = {f32_at(scratch), f32_at(scratch + 4), f32_at(scratch + 8)};
+            if (cmd != "where") {
+                float v[3] = {};
+                std::sscanf(cmd.c_str() + cmd.find(':') + 1, "%f,%f,%f", &v[0], &v[1], &v[2]);
+                for (int i = 0; i < 3; ++i) pos[i] = cmd[2] == 'r' ? pos[i] + v[i] : v[i];
+                m.write(scratch, pos, 12);
+                c.call(r.lib_func("_ZN9Character11SetPositionERKN6glitch4core8vector3dIfEE"), {p + 4, scratch});
+            }
+            LOG("test: player %s %.0f %.0f %.0f", cmd == "where" ? "at" : "moved to", pos[0], pos[1], pos[2]);
         } else {
             LOG("test: unknown command '%s'", cmd.c_str());
         }
