@@ -136,10 +136,16 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
         if (!settings::apply_override(&cfg, o)) FATAL("--set %s: unknown setting (expected section.key=value)", o.c_str());
 
     // ---- window + GL ------------------------------------------------------------------------------
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) FATAL("SDL_Init: %s", SDL_GetError());
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_SENSOR) != 0) FATAL("SDL_Init: %s", SDL_GetError());
+#ifdef GANGSTAR_GLES
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);  // Android: GLES 3.0
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+#else
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+#endif
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);  // the game renders into our own framebuffer
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
     SDL_Window* win = SDL_CreateWindow("Gangstar: Miami Vindication", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -216,7 +222,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
     {  // audio: the Java GLMediaPlayer class on our mixer
         media::Config mc;
         mc.data_dir = paths.data;
-        mc.table_file = paths.root / "work" / "sound_table.txt";
+        mc.table_file = paths.sound_table;
         mc.restore_missing = cfg.restore_missing_sounds;
         mc.native_name = [&rt](int i) -> std::string {  // the game's own name for sound i (FileManager)
             const uint32_t p = uint32_t(rt.main_cpu().call(rt.lib_func("_Z23AndroidGetSoundFielNamei"), {uint32_t(i)}));

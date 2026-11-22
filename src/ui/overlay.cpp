@@ -399,7 +399,12 @@ bool init(SDL_Window* win, SDL_GLContext ctx) {
     io.BackendPlatformName = "gangstar_sdl2";
     io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
     g_last_frame = std::chrono::steady_clock::now();
-    if (!ImGui_ImplOpenGL3_Init("#version 130")) {
+#ifdef GANGSTAR_GLES
+    const char* glsl = "#version 300 es";
+#else
+    const char* glsl = "#version 130";
+#endif
+    if (!ImGui_ImplOpenGL3_Init(glsl)) {
         LOG("overlay: ImGui init failed");
         return false;
     }

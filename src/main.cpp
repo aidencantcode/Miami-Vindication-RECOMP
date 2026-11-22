@@ -8,6 +8,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#ifdef __ANDROID__
+#include <pthread.h>
+#endif
 #include <string>
 #include <vector>
 
@@ -20,6 +23,7 @@ int run_selftest_fastpath(const rt::Paths& paths);
 
 namespace fs = std::filesystem;
 
+#ifndef __ANDROID__
 static fs::path find_project_root() {
     // Walk up from the working directory and from the executable until we find
     // the extracted APK (work/apk/...), which marks the project root.
@@ -36,6 +40,7 @@ static fs::path find_project_root() {
     }
     return {};
 }
+#endif
 
 static int run_window(int frames) {
     if (SDL_Init(SDL_INIT_VIDEO) != 0) FATAL("SDL_Init: %s", SDL_GetError());
@@ -78,13 +83,48 @@ static int run_window(int frames) {
     return 0;
 }
 
+#ifdef __ANDROID__
+// SDL runs main() on a Java thread with a small stack; recompiled code nests every guest call as a
+// host C call (the Windows build links a 64 MB main-thread stack for the same reason). So the real
+// main runs on a native thread with a 64 MB stack.
+static int real_main(int argc, char** argv);
+struct MainArgs { int argc; char** argv; int rc; };
+static void* main_thread(void* p) {
+    auto* a = static_cast<MainArgs*>(p);
+    a->rc = real_main(a->argc, a->argv);
+    return nullptr;
+}
 int main(int argc, char** argv) {
+    MainArgs a{argc, argv, 1};
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 64u << 20);
+    pthread_t t;
+    if (pthread_create(&t, &attr, &main_thread, &a) != 0) return real_main(argc, argv);
+    pthread_join(t, nullptr);
+    return a.rc;
+}
+static int real_main(int argc, char** argv) {
+#else
+int main(int argc, char** argv) {
+#endif
+#ifdef __ANDROID__
+    // Android: everything lives in the app's folder on shared storage
+    // (/storage/emulated/0/Android/data/<package>/files), which the owner fills from a PC:
+    //   libGangster2.so, sound_table.txt, gameloft/games/Gangstar2/ (the game data)
+    // Saves (sandbox/), settings (user/) and runtime.log are written there too.
+    const char* ext = SDL_AndroidGetExternalStoragePath();
+    fs::path root = ext ? fs::path(ext) : fs::path();
+    const fs::path home = root;
+    const fs::path log_dir = root;
+#else
     fs::path root = find_project_root();
     // GANGSTAR_HOME=<dir>: a separate home for test runs. Saves (sandbox), settings.ini and
     // runtime.log go under <dir>, so a test never touches the owner's save, settings or log.
     const char* home_env = std::getenv("GANGSTAR_HOME");
     const fs::path home = home_env && *home_env ? fs::absolute(home_env) : fs::path();
     const fs::path log_dir = !home.empty() ? home : (root.empty() ? fs::path("build") : root / "build");
+#endif
     fs::create_directories(log_dir);
     core::log_open((log_dir / "runtime.log").string().c_str());
 
@@ -120,11 +160,25 @@ int main(int argc, char** argv) {
     }
 
     int rc = 0;
+#ifdef __ANDROID__
+    rt::Paths p{root, root / "libGangster2.so", root / "gameloft" / "games" / "Gangstar2", root / "sandbox",
+                root / "user", root / "sound_table.txt"};
+    LOG("Android: files in %s", root.string().c_str());
+    if (root.empty() || !fs::exists(p.so) || !fs::exists(p.data)) {
+        const std::string msg = "Copy the game files to " + (root.empty() ? std::string("the app folder") : root.string()) +
+                                ":\n  libGangster2.so\n  sound_table.txt (optional)\n  gameloft/games/Gangstar2/ (the game data)";
+        LOG("%s", msg.c_str());
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Gangstar: game files missing", msg.c_str(), nullptr);
+        core::log_close();
+        return 1;
+    }
+#else
     rt::Paths p{root, root / "work" / "apk" / "lib" / "armeabi" / "libGangster2.so",
                 root / "original" / "gameloft" / "games" / "Gangstar2",
                 !home.empty() ? home / "sandbox" : root / "work" / "sandbox",
-                !home.empty() ? home / "user" : root / "work" / "user"};
+                !home.empty() ? home / "user" : root / "work" / "user", root / "work" / "sound_table.txt"};
     if (!home.empty()) LOG("GANGSTAR_HOME: %s (saves, settings and log kept here)", home.string().c_str());
+#endif
     if ((mode == "--run" || mode == "--selftest-fastpath") && root.empty())
         FATAL("project root not found (expected work/apk/lib/armeabi/libGangster2.so)");
     if (mode == "--run") {

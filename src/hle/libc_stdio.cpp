@@ -537,9 +537,12 @@ void write_stat(Cpu& c, uint32_t buf, const fs::path& host) {
     uint32_t mode = dir ? 0040755 : 0100644, nlink = 1, blksize = 4096;
     int64_t size = dir ? 4096 : int64_t(fs::file_size(host, ec));
     uint64_t blocks = uint64_t(size + 511) / 512;
+    // file time -> system time without C++20 clock_cast (missing in Android's libc++): shift by the
+    // offset between the two clocks' "now"
     auto ft = fs::last_write_time(host, ec);
-    uint32_t mtime = uint32_t(std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::clock_cast<std::chrono::system_clock>(ft).time_since_epoch()).count());
+    const auto sys = std::chrono::system_clock::now() +
+                     std::chrono::duration_cast<std::chrono::system_clock::duration>(ft - fs::file_time_type::clock::now());
+    uint32_t mtime = uint32_t(std::chrono::duration_cast<std::chrono::seconds>(sys.time_since_epoch()).count());
     std::memcpy(st + 16, &mode, 4);
     std::memcpy(st + 20, &nlink, 4);
     std::memcpy(st + 48, &size, 8);

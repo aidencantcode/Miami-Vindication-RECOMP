@@ -3,6 +3,10 @@
 #include <cstdlib>
 #include <mutex>
 
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
+
 namespace core {
 
 static FILE* g_log = nullptr;
@@ -23,8 +27,12 @@ static void vlog(const char* fmt, va_list ap) {
     char buf[4096];
     std::vsnprintf(buf, sizeof buf, fmt, ap);
     std::lock_guard lock(g_log_mutex);
+#ifdef __ANDROID__
+    __android_log_write(ANDROID_LOG_INFO, "gangstar", buf);  // logcat (stdout goes nowhere)
+#else
     std::fputs(buf, stdout);
     std::fputc('\n', stdout);
+#endif
     if (g_log) {
         std::fputs(buf, g_log);
         std::fputc('\n', g_log);

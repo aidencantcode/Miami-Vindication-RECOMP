@@ -14,6 +14,17 @@
 #include <GLES2/gl2ext.h>
 
 // Desktop names the code uses, mapped to GLES.
+#ifndef APIENTRY
+#define APIENTRY GL_APIENTRY
+#endif
+#define GL_SOURCE0_RGB GL_SRC0_RGB
+#define GL_SOURCE1_RGB GL_SRC1_RGB
+#define GL_SOURCE2_RGB GL_SRC2_RGB
+#define GL_SOURCE0_ALPHA GL_SRC0_ALPHA
+#define GL_SOURCE1_ALPHA GL_SRC1_ALPHA
+#define GL_SOURCE2_ALPHA GL_SRC2_ALPHA
+typedef void(GL_APIENTRYP PFNGLPOINTPARAMETERFPROC)(GLenum pname, GLfloat param);
+typedef void(GL_APIENTRYP PFNGLPOINTPARAMETERFVPROC)(GLenum pname, const GLfloat* params);
 #ifndef GL_CLAMP_TO_EDGE
 #define GL_CLAMP_TO_EDGE 0x812F
 #endif

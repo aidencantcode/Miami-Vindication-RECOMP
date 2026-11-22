@@ -1,0 +1,58 @@
+// The native code is the repository's top-level CMakeLists.txt (its ANDROID branch builds libmain.so
+// from src/, the recompiled game code in work/recomp and third_party/SDL2, imgui, stb).
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.recomp.gangstar'
+    compileSdk 34
+    ndkVersion '27.2.12479018'
+
+    defaultConfig {
+        applicationId 'com.recomp.gangstar'
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName '0.1'
+        ndk {
+            // Handhelds (Retroid, Odin): arm64. -Pabis=x86_64 adds the emulator ABI.
+            abiFilters(*(project.findProperty('abis') ?: 'arm64-v8a').split(','))
+        }
+        externalNativeBuild {
+            cmake {
+                arguments '-DANDROID_STL=c++_static', '-DCMAKE_BUILD_TYPE=Release'
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path '../../CMakeLists.txt'
+            version '3.22.1'
+            buildStagingDirectory '../../build/android-gradle'
+        }
+    }
+
+    sourceSets {
+        main {
+            // SDL's Java side (SDLActivity & co.) straight from the SDL source copy
+            java.srcDirs += ['../../third_party/SDL2/android-project/app/src/main/java']
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.debug  // a personal build: signed with the debug key
+        }
+        debug {
+            jniDebuggable true
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}

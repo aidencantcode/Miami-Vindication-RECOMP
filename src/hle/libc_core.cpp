@@ -17,6 +17,10 @@
 #include "hle/hle.h"
 #include "rt/runtime.h"
 
+#ifndef _WIN32
+#include <strings.h>  // strcasecmp
+#endif
+
 namespace hle {
 
 using cpu::Args;
@@ -163,8 +167,15 @@ H(s_memchr) {
 H(s_strlen) { c.ret(uint32_t(std::strlen(M.cstr(a.u32())))); }
 H(s_strcmp) { uint32_t x = a.u32(), y = a.u32(); c.ret(uint32_t(std::strcmp(M.cstr(x), M.cstr(y)))); }
 H(s_strncmp) { uint32_t x = a.u32(), y = a.u32(), n = a.u32(); c.ret(uint32_t(std::strncmp(M.cstr(x), M.cstr(y), n))); }
-H(s_strcasecmp) { uint32_t x = a.u32(), y = a.u32(); c.ret(uint32_t(_stricmp(M.cstr(x), M.cstr(y)))); }
-H(s_strncasecmp) { uint32_t x = a.u32(), y = a.u32(), n = a.u32(); c.ret(uint32_t(_strnicmp(M.cstr(x), M.cstr(y), n))); }
+#ifdef _WIN32
+int host_strcasecmp(const char* x, const char* y) { return _stricmp(x, y); }
+int host_strncasecmp(const char* x, const char* y, size_t n) { return _strnicmp(x, y, n); }
+#else
+int host_strcasecmp(const char* x, const char* y) { return strcasecmp(x, y); }
+int host_strncasecmp(const char* x, const char* y, size_t n) { return strncasecmp(x, y, n); }
+#endif
+H(s_strcasecmp) { uint32_t x = a.u32(), y = a.u32(); c.ret(uint32_t(host_strcasecmp(M.cstr(x), M.cstr(y)))); }
+H(s_strncasecmp) { uint32_t x = a.u32(), y = a.u32(), n = a.u32(); c.ret(uint32_t(host_strncasecmp(M.cstr(x), M.cstr(y), n))); }
 H(s_strcpy) { uint32_t d = a.u32(), s = a.u32(); std::memmove(M.ptr(d), M.ptr(s), std::strlen(M.cstr(s)) + 1); c.ret(d); }
 H(s_strncpy) {
     uint32_t d = a.u32(), s = a.u32(), n = a.u32();
@@ -336,7 +347,11 @@ H(t_localtime) {
     if (!buf) buf = c.rt().heap().alloc(44);
     std::time_t t = int32_t(M.r32(a.u32()));
     std::tm tm{};
+#ifdef _WIN32
     localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
     write_tm(c, buf, tm);
     c.ret(buf);
 }
@@ -345,7 +360,11 @@ H(t_gmtime) {
     if (!buf) buf = c.rt().heap().alloc(44);
     std::time_t t = int32_t(M.r32(a.u32()));
     std::tm tm{};
+#ifdef _WIN32
     gmtime_s(&tm, &t);
+#else
+    gmtime_r(&t, &tm);
+#endif
     write_tm(c, buf, tm);
     c.ret(buf);
 }

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.25)
+cmake_minimum_required(VERSION 3.22)  # 3.22: the Android SDK's CMake
 
 # Dependencies come from vcpkg (manifest: vcpkg.json). CMakePresets.json points
 # CMAKE_TOOLCHAIN_FILE at Visual Studio's bundled vcpkg.
@@ -8,21 +8,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
-find_package(SDL2 CONFIG REQUIRED)
-find_package(OpenGL REQUIRED)
-find_package(imgui CONFIG REQUIRED)
-find_path(STB_INCLUDE_DIR stb_vorbis.c)  # vcpkg "stb" (header-only)
-# Unicorn: the same 2.1.4 build the Python probe uses, prepared by tools/setup_unicorn.ps1
-# (headers + import lib + DLL under third_party/unicorn, git-ignored).
-set(UNICORN_ROOT "${CMAKE_SOURCE_DIR}/third_party/unicorn" CACHE PATH "Prebuilt Unicorn")
-add_library(unicorn SHARED IMPORTED)
-set_target_properties(unicorn PROPERTIES
-    IMPORTED_IMPLIB "${UNICORN_ROOT}/lib/unicorn.lib"
-    IMPORTED_LOCATION "${UNICORN_ROOT}/bin/unicorn.dll"
-    INTERFACE_INCLUDE_DIRECTORIES "${UNICORN_ROOT}/include")
-set(UNICORN_TARGET unicorn)
-
-add_executable(gangstar
+set(GANGSTAR_SOURCES
     src/main.cpp
     src/core/log.cpp
     src/core/guest_memory.cpp
@@ -49,6 +35,50 @@ add_executable(gangstar
     src/game.cpp
     src/selftest.cpp
 )
+
+if(ANDROID)
+    # ---- Android (Phase 5B): libmain.so for SDL's Java activity (android/). Recompiled code only, GLES 3,
+    # SDL2 / Dear ImGui / stb from third_party (copies of the versions vcpkg uses on Windows).
+    set(TP "${CMAKE_SOURCE_DIR}/third_party")
+    set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+    set(SDL_SHARED ON CACHE BOOL "" FORCE)
+    set(SDL_TEST OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${TP}/SDL2" SDL2)
+    add_library(imgui STATIC "${TP}/imgui/imgui.cpp" "${TP}/imgui/imgui_draw.cpp" "${TP}/imgui/imgui_tables.cpp"
+                "${TP}/imgui/imgui_widgets.cpp" "${TP}/imgui/backends/imgui_impl_opengl3.cpp")
+    target_include_directories(imgui PUBLIC "${TP}/imgui" "${TP}/imgui/backends")
+    target_compile_definitions(imgui PUBLIC IMGUI_IMPL_OPENGL_ES3)
+    file(GLOB RECOMP_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/work/recomp/*.c")
+    if(NOT RECOMP_SOURCES)
+        message(FATAL_ERROR "work/recomp is empty: run python -I tools/recomp/codegen.py first")
+    endif()
+    add_library(game_recomp STATIC ${RECOMP_SOURCES})
+    target_include_directories(game_recomp PUBLIC "${CMAKE_SOURCE_DIR}/src/recomp" "${CMAKE_SOURCE_DIR}/work/recomp")
+    set_target_properties(game_recomp PROPERTIES C_STANDARD 11)
+    # strict IEEE (soft-float results), unwind tables so C++ exceptions pass through generated C frames
+    target_compile_options(game_recomp PRIVATE -O2 -ffp-contract=off -fexceptions -funwind-tables -w)
+    add_library(main SHARED ${GANGSTAR_SOURCES} src/recomp/rc_runtime.cpp)
+    target_include_directories(main PRIVATE src "${TP}/stb")
+    target_compile_definitions(main PRIVATE GANGSTAR_GLES GANGSTAR_NO_UNICORN GANGSTAR_HAVE_RECOMP)
+    target_link_libraries(main PRIVATE SDL2::SDL2 imgui game_recomp GLESv3 GLESv1_CM EGL log android)
+    return()
+endif()
+
+find_package(SDL2 CONFIG REQUIRED)
+find_package(OpenGL REQUIRED)
+find_package(imgui CONFIG REQUIRED)
+find_path(STB_INCLUDE_DIR stb_vorbis.c)  # vcpkg "stb" (header-only)
+# Unicorn: the same 2.1.4 build the Python probe uses, prepared by tools/setup_unicorn.ps1
+# (headers + import lib + DLL under third_party/unicorn, git-ignored).
+set(UNICORN_ROOT "${CMAKE_SOURCE_DIR}/third_party/unicorn" CACHE PATH "Prebuilt Unicorn")
+add_library(unicorn SHARED IMPORTED)
+set_target_properties(unicorn PROPERTIES
+    IMPORTED_IMPLIB "${UNICORN_ROOT}/lib/unicorn.lib"
+    IMPORTED_LOCATION "${UNICORN_ROOT}/bin/unicorn.dll"
+    INTERFACE_INCLUDE_DIRECTORIES "${UNICORN_ROOT}/include")
+set(UNICORN_TARGET unicorn)
+
+add_executable(gangstar ${GANGSTAR_SOURCES})
 target_include_directories(gangstar PRIVATE src ${STB_INCLUDE_DIR})
 target_compile_definitions(gangstar PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
 if(MSVC)

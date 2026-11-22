@@ -23,6 +23,7 @@ struct Paths {
     std::filesystem::path data;       // game data folder (read-only)
     std::filesystem::path sandbox;    // where guest writes go
     std::filesystem::path user;       // settings.ini etc.
+    std::filesystem::path sound_table;  // tools/extract_sound_table.py output (optional)
 };
 
 class Runtime {
