@@ -80,8 +80,13 @@ static int run_window(int frames) {
 
 int main(int argc, char** argv) {
     fs::path root = find_project_root();
-    fs::create_directories(root.empty() ? fs::path("build") : root / "build");
-    core::log_open(((root.empty() ? fs::path(".") : root) / "build" / "runtime.log").string().c_str());
+    // GANGSTAR_HOME=<dir>: a separate home for test runs. Saves (sandbox), settings.ini and
+    // runtime.log go under <dir>, so a test never touches the owner's save, settings or log.
+    const char* home_env = std::getenv("GANGSTAR_HOME");
+    const fs::path home = home_env && *home_env ? fs::absolute(home_env) : fs::path();
+    const fs::path log_dir = !home.empty() ? home : (root.empty() ? fs::path("build") : root / "build");
+    fs::create_directories(log_dir);
+    core::log_open((log_dir / "runtime.log").string().c_str());
 
     std::string mode = argc > 1 ? argv[1] : "--run";
     int frames = 0;
@@ -116,8 +121,10 @@ int main(int argc, char** argv) {
 
     int rc = 0;
     rt::Paths p{root, root / "work" / "apk" / "lib" / "armeabi" / "libGangster2.so",
-                root / "original" / "gameloft" / "games" / "Gangstar2", root / "work" / "sandbox",
-                root / "work" / "user"};
+                root / "original" / "gameloft" / "games" / "Gangstar2",
+                !home.empty() ? home / "sandbox" : root / "work" / "sandbox",
+                !home.empty() ? home / "user" : root / "work" / "user"};
+    if (!home.empty()) LOG("GANGSTAR_HOME: %s (saves, settings and log kept here)", home.string().c_str());
     if ((mode == "--run" || mode == "--selftest-fastpath") && root.empty())
         FATAL("project root not found (expected work/apk/lib/armeabi/libGangster2.so)");
     if (mode == "--run") {

@@ -272,6 +272,43 @@ Milestones (each one or more commits, each with a pass/fail check):
   optimisations yet: met on PC. Still matters for Android (slower CPUs).
 - **4.7 Cleanup.** Unicorn stays as the reference/debug backend (`--cpu unicorn`). Notes and docs.
 
+## ▶ Work queue (owner, 2026-11-22): do these in order, unattended
+The owner is away and asked for all of this to be done, resuming automatically after usage limits
+(a recurring check-in job in the Claude session re-sends "continue"). **On resume: read this list,
+`git log --oneline -15`, and the matching NOTES section; continue with the first item not marked
+done.** Mark each item ✅ here when it is committed and verified.
+
+Rules while unattended:
+- Never close or kill a `gangstar.exe` the owner started. If the build can't overwrite the exe
+  because it is running, rename the running exe out of the way (allowed by Windows; the running game
+  is unaffected) and build again.
+- Test runs must not touch the owner's save, settings or log: use `GANGSTAR_HOME=<dir>` (sandbox,
+  user settings and runtime.log all go under that folder; Q0).
+- Small verified steps, one commit each, NOTES/PLAN kept current, unknowns written down.
+
+Queue:
+- Q0 Test isolation: `GANGSTAR_HOME`, test script uses a copy of the owner's save.
+- Q1 Controls (owner's list):
+  - a. Input delay: controls feel unresponsive. Measure input-to-game latency, remove what adds frames.
+  - b. Manual aim recoil/spread much smaller than the game's (random) auto-aim spread.
+  - c. Mouse: left button alone fires **with the game's own auto-aim** (as on the phone when you shoot or
+    melee); right button = manual aim; middle click **toggles** lock on nearest / unlock. No more
+    auto-aim on hold. Wheel scroll stays weapon switching. Controller: RB fire auto-aims the same way.
+  - d. In cars: **Space = brake** (no longer fires; left mouse fires). **R = reload.**
+  - e. Keyboard/mouse layout modelled on GTA Vice City PC, including helicopter controls.
+- Q2 Free look, GTA VC PC style (5A.6): direct mouse, camera stays put, slow return after a pause, on
+  foot and in cars; settings for the pause and the return speed.
+- Q3 Aim leftovers: arm pose above the crosshair, aim point near walls (world ray), RB drive-by test.
+- Q4 Radio box (5A.2): owner says it looks fixed; confirm at 800, 854 and 16:9 widths, close it.
+- Q5 Draw distance slider live + LOD options (5C.2, 5C.3), memory and fps measured downtown.
+- Q6 Post-process groundwork (5C.0): pass between the 3D scene and the HUD, readable depth.
+- Q7 Bloom (5C.5).
+- Q8 Fog step 2 (5C.4): height fog, sun haze at sunrise/sunset, bloom stronger in fog.
+- Q9 Dynamic lights (5C.6, owner said yes): car headlights/taillights, lampposts, muzzle flash.
+- Q10 Android (5B), renderer chosen by us for Snapdragon **and** Mali: arm64 build, GLES 3 shader
+  backend, texture decode, touch/tilt/controller, speed work, APK with saves in the app folder.
+  Shader code for Q6-Q9 must stay portable to it (GLSL that builds as desktop GL and GLES 3).
+
 ## ⏸ Phase 5: fixes from play-testing, then the Android port (planned 2026-11-20; owner says when to start)
 
 **Owner's play-test list (2026-11-20).** Each item gets its own commit and a pass/fail check.
