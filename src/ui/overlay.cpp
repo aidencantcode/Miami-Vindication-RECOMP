@@ -87,6 +87,16 @@ void platform_event(const SDL_Event& ev) {
             break;
         }
         case SDL_MOUSEWHEEL: io.AddMouseWheelEvent(float(ev.wheel.x), float(ev.wheel.y)); break;
+        case SDL_FINGERDOWN:
+        case SDL_FINGERMOTION:
+        case SDL_FINGERUP: {  // touchscreens: the first finger acts as the mouse (SDL's own emulation is off)
+            int w = 0, h = 0;
+            if (g_win) SDL_GetWindowSize(g_win, &w, &h);
+            io.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
+            io.AddMousePosEvent(ev.tfinger.x * float(w), ev.tfinger.y * float(h));
+            if (ev.type != SDL_FINGERMOTION) io.AddMouseButtonEvent(0, ev.type == SDL_FINGERDOWN);
+            break;
+        }
         case SDL_KEYDOWN:
         case SDL_KEYUP: {
             const SDL_Keymod m = SDL_Keymod(ev.key.keysym.mod);
@@ -428,6 +438,11 @@ bool handle_event(const SDL_Event& ev) {
     if (!g_ready) return false;
     // Toggle: F1, controller Guide, or L3+R3 together.
     if (ev.type == SDL_KEYDOWN && !ev.key.repeat && ev.key.keysym.sym == SDLK_F1) {
+        g_open = !g_open;
+        return true;
+    }
+    // Touchscreens: three fingers down at once opens (or closes) the menu.
+    if (ev.type == SDL_FINGERDOWN && SDL_GetNumTouchFingers(ev.tfinger.touchId) == 3) {
         g_open = !g_open;
         return true;
     }

@@ -30,4 +30,5 @@ The APK contains none of the game's files; it only runs your copy.
 ## Controls
 
 Touch works like the phone. A controller works like on Windows (see the main README). Tilt steering
-uses the device's motion sensor when no controller is steering.
+uses the device's motion sensor when no controller is steering (if it turns the wrong way: settings,
+`tilt_invert`). **Three fingers on the screen** open the settings menu (or F1 / Guide / L3+R3).

@@ -133,6 +133,7 @@ private:
     static constexpr int kFingers = 5;
     SDL_FingerID finger_[kFingers] = {};
     bool finger_down_[kFingers] = {};
+    int finger_x_[kFingers] = {}, finger_y_[kFingers] = {};  // last game position (to lift them)
     int win_w_ = 1280, win_h_ = 720;
     SDL_Sensor* accel_ = nullptr;               // the device accelerometer (Android)
     bool tilt_handheld_ = true, tilt_invert_ = false;

@@ -115,6 +115,11 @@ void Input::release_all() {
         touch(0, vt_[P_MOUSE].x, vt_[P_MOUSE].y, P_MOUSE);
         mouse_down_ = false;
     }
+    for (int i = 0; i < kFingers; ++i)  // real fingers still on the screen
+        if (finger_down_[i]) {
+            touch(0, finger_x_[i], finger_y_[i], i);
+            finger_down_[i] = false;
+        }
     act_ptr_.fill(0);
     tap_left_.fill(0);
     tap_frames_.fill(0);
@@ -313,6 +318,8 @@ void Input::handle(const SDL_Event& ev) {
             touch(action, gx, gy, slot);
             finger_[slot] = ev.tfinger.fingerId;
             finger_down_[slot] = ev.type != SDL_FINGERUP;
+            finger_x_[slot] = gx;
+            finger_y_[slot] = gy;
             break;
         }
         case SDL_KEYDOWN:
