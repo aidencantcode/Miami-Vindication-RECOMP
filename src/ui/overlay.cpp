@@ -289,6 +289,12 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
                 ch |= ImGui::SliderFloat("Bloom threshold", &s.bloom_threshold, 0.3f, 1.0f, "%.2f");
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("How bright something must be to glow (lower = more glow).");
                 ch |= ImGui::SliderFloat("Bloom radius", &s.bloom_radius, 0.5f, 2.0f, "%.2f");
+                ch |= ImGui::Checkbox("Bloom by time of day", &s.bloom_adaptive);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("No glow by day (no blurry daytime), easing in through sunset and dawn,\n"
+                                      "full at night. Changes slowly when the clock jumps.");
+                if (s.bloom_adaptive)
+                    ch |= ImGui::SliderFloat("Daytime bloom", &s.bloom_day, 0.0f, 1.0f, "%.2f");
             }
             ImGui::EndTabItem();
         }

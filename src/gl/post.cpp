@@ -1025,7 +1025,22 @@ void flash(float x, float y, float z) {
 namespace {
 float g_sun_dir[3] = {-0.97f, 0.0f, 0.25f};
 }
+namespace {
+int g_minute = -1;           // game clock (minutes since midnight), -1 = unknown
+float g_bloom_tod = -1;      // smoothed time-of-day bloom factor (adaptive bloom)
+// Adaptive bloom: none by day (07:30-16:30), easing in through sunset (to 19:30), full at night,
+// easing out through dawn (04:30-07:30).
+float bloom_time_factor(int minute) {
+    auto ease = [](float t) { t = std::clamp(t, 0.0f, 1.0f); return t * t * (3 - 2 * t); };
+    const float h = float(((minute % 1440) + 1440) % 1440) / 60.0f;
+    if (h >= 7.5f && h < 16.5f) return 0.0f;
+    if (h >= 16.5f && h < 19.5f) return ease((h - 16.5f) / 3.0f);
+    if (h >= 4.5f && h < 7.5f) return 1.0f - ease((h - 4.5f) / 3.0f);
+    return 1.0f;
+}
+}  // namespace
 void set_time_of_day(int minute) {
+    g_minute = minute;
     // Rises in the east (+x) at 6:00, highest in the south at 12:30, sets in the west (-x) at 19:00.
     const float k = std::clamp((minute / 60.0f - 6.0f) / 13.0f, -0.1f, 1.1f) * 3.14159265f;
     float d[3] = {std::cos(k), -0.35f * std::sin(k), 0.12f + 0.9f * std::max(0.0f, std::sin(k))};
@@ -1136,7 +1151,19 @@ void run(const Scene& sc, bool fixed_function) {
         } else {
             const float fog_lum = 0.299f * sc.fog_color[0] + 0.587f * sc.fog_color[1] + 0.114f * sc.fog_color[2];
             g_night = std::clamp((0.5f - fog_lum) / 0.35f, 0.0f, 1.0f);
-            const bool want_chain = g_set.bloom && g_set.bloom_intensity > 0;
+            // adaptive bloom: by time of day, changing slowly (a few seconds) when the clock jumps
+            float bloom_k = 1.0f;
+            if (g_set.bloom_adaptive) {
+                const float target = g_minute < 0 ? 1.0f : bloom_time_factor(g_minute);
+                static Uint32 last = 0;
+                const Uint32 t = SDL_GetTicks();
+                const float step = last ? std::clamp((t - last) / 1000.0f, 0.0f, 0.25f) : 1.0f;
+                last = t;
+                g_bloom_tod = g_bloom_tod < 0 ? target : g_bloom_tod + (target - g_bloom_tod) * std::min(1.0f, step / 3.0f);
+                const float day = std::clamp(g_set.bloom_day, 0.0f, 1.0f);
+                bloom_k = day + (1.0f - day) * g_bloom_tod;
+            }
+            const bool want_chain = g_set.bloom && g_set.bloom_intensity > 0 && bloom_k > 0.005f;
             const bool chain = want_chain && ensure_bloom_targets(sc.w, sc.h);
             if (chain) run_bloom();
             const bool bloom = chain && g_set.bloom && g_set.bloom_intensity > 0;
@@ -1219,7 +1246,7 @@ void run(const Scene& sc, bool fixed_function) {
             }
             // the up chain sums the levels: normalise so intensity means the same at any level count
             p_glUniform1f(uni(p, "u_bloom_intensity"),
-                          g_set.bloom_intensity / float(std::max(1, g_level_count)) * 2.0f * (1.0f + 2.0f * g_night));
+                          g_set.bloom_intensity * bloom_k / float(std::max(1, g_level_count)) * 2.0f * (1.0f + 2.0f * g_night));
             draw_fullscreen();
             if (lights && g_any_corona && g_corona_prog) run_corona_pass(sc, inv_view);
         }

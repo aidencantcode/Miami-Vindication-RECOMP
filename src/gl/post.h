@@ -16,6 +16,8 @@ struct Settings {
     float bloom_intensity = 0.5f;   // 0..2: how much glow is added
     float bloom_threshold = 0.7f;   // 0..1: brightness where glow starts
     float bloom_radius = 1.0f;      // 0.5..2: blur size
+    bool bloom_adaptive = true;     // by time of day: none by day, easing in at sunset, full at night
+    float bloom_day = 0.0f;         // 0..1: daytime bloom when adaptive (fraction of the night's)
     bool height_fog = true;         // fog step 2: thicker near the ground / sea, sun haze (needs depth)
     float height_fog_amount = 1.0f; // 0..2
     bool sky_haze = true;           // the sky near the horizon fades into the fog colour (atmospheric fog)

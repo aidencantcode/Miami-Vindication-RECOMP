@@ -36,6 +36,8 @@ struct Settings {
     float bloom_intensity = 0.8f;           // 0..2 (up to 3x more at night, see post.cpp)
     float bloom_threshold = 0.75f;          // 0..1: brightness where the glow starts
     float bloom_radius = 1.0f;              // 0.5..2: glow size
+    bool bloom_adaptive = true;             // by time of day: none by day, easing in at sunset/dawn, full at night
+    float bloom_day = 0.0f;                 // 0..1: daytime bloom when adaptive (fraction of the night's)
     bool height_fog = true;                 // fog step 2: thicker near the ground and the sea, sun haze
     float height_fog_amount = 1.0f;         // 0..2
     bool dynamic_lights = true;             // light pools around lamps, neon and car lights (from the game's glow sprites)

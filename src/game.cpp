@@ -113,6 +113,8 @@ void apply_post_settings(const settings::Settings& s) {
     p.bloom_intensity = s.bloom_intensity;
     p.bloom_threshold = s.bloom_threshold;
     p.bloom_radius = s.bloom_radius;
+    p.bloom_adaptive = s.bloom_adaptive;
+    p.bloom_day = s.bloom_day;
     p.height_fog = s.height_fog;
     p.height_fog_amount = s.height_fog_amount;
     p.sky_haze = s.fog == "atmospheric" && s.sky_haze;

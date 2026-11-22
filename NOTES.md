@@ -1022,6 +1022,12 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
     128 drawn): ~0.3 ms (240-260 vs 270 fps). The first coronas were ~1.3 ms: near lamps got coronas
     hundreds of pixels wide, blended into the MSAA buffer. Debug: `GANGSTAR_POST_TEST=lights` shows only
     the added light.
+- **Adaptive bloom** (owner: night bloom only, rising through sunset / dawn, no blurry day):
+  `[graphics] bloom_adaptive` (default on) scales bloom by the game clock: 0 from 07:30 to 16:30,
+  smoothstep up to full by 19:30, full at night, down again 04:30-07:30, smoothed over ~3 s so a
+  clock jump fades; `bloom_day` (default 0) keeps a fraction by day. The bloom chain is skipped when
+  the factor is ~0 (no cost by day). Checked at 12:00 (crisp, vs washed out with bloom always on),
+  18:00 (mild) and 23:30 (full).
 
 ### 5A.1 Sprint forward/back (fixed 2026-11-22)
 - `AnalogStick::processTouch` (decomp_input.c): drag in screen pixels → 480×320 units as
