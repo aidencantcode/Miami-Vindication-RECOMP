@@ -20,6 +20,7 @@
 #include "gl/ffp.h"
 #include "gl/glmath.h"
 #include "gl/post.h"
+#include "gl/s3tc.h"
 #include "rt/runtime.h"
 
 namespace gles1 {
@@ -1037,6 +1038,21 @@ H(tex_subimage_2d) {
     GLenum f = a.u32(), ty = a.u32();
     glTexSubImage2D(t, l, x, y, w, h, f, ty, host(c, a.u32()));
 }
+// DXT on GPUs without S3TC (Adreno, Mali): decoded to RGBA8 at upload (GANGSTAR_DECODE_S3TC=1
+// forces it on desktop for testing).
+bool g_decode_s3tc = false;
+void upload_compressed(GLenum t, GLint l, GLenum ifmt, GLsizei w, GLsizei h, GLsizei n, const void* data) {
+    if (g_decode_s3tc && s3tc::is_s3tc(ifmt)) {
+        static std::vector<uint8_t> rgba;
+        if (s3tc::decode(ifmt, w, h, static_cast<const uint8_t*>(data), size_t(n), rgba)) {
+            glTexImage2D(t, l, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+            return;
+        }
+        LOG("GL: DXT %#x %dx%d: %d bytes is too short to decode", ifmt, w, h, n);
+    }
+    p_glCompressedTexImage2D(t, l, ifmt, w, h, 0, n, data);
+}
+
 H(compressed_tex_image_2d) {
     GLenum t = a.u32(); GLint l = a.s32(); GLenum ifmt = a.u32(); GLsizei w = a.s32(), h = a.s32(); GLint b = a.s32();
     GLsizei n = a.s32();
@@ -1044,14 +1060,22 @@ H(compressed_tex_image_2d) {
     if (l == 0) g_dbg_tex_size[bound_tex0()] = {w, h};
     if (l == 0 && t == GL_TEXTURE_2D)  // DXT1 without alpha and ETC1 are RGB; the rest has alpha
         ffp::set_texture_format(g_bound_2d[g_unit], ifmt == 0x83F0 || ifmt == 0x8D64 ? GL_RGB : GL_RGBA);
-    p_glCompressedTexImage2D(t, l, ifmt, w, h, b, n, data);
+    (void)b;
+    upload_compressed(t, l, ifmt, w, h, n, data);
     if (t == GL_TEXTURE_2D && g_tex_observer.on_compressed_upload)
         g_tex_observer.on_compressed_upload(g_bound_2d[g_unit], l, ifmt, w, h, static_cast<const uint8_t*>(data), n);
 }
 H(compressed_tex_subimage_2d) {
     GLenum t = a.u32(); GLint l = a.s32(), x = a.s32(), y = a.s32(); GLsizei w = a.s32(), h = a.s32();
     GLenum f = a.u32(); GLsizei n = a.s32();
-    p_glCompressedTexSubImage2D(t, l, x, y, w, h, f, n, host(c, a.u32()));
+    const void* data = host(c, a.u32());
+    if (g_decode_s3tc && s3tc::is_s3tc(f)) {
+        static std::vector<uint8_t> rgba;
+        if (s3tc::decode(f, w, h, static_cast<const uint8_t*>(data), size_t(n), rgba))
+            glTexSubImage2D(t, l, x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        return;
+    }
+    p_glCompressedTexSubImage2D(t, l, x, y, w, h, f, n, data);
 }
 H(copy_tex_image_2d) {
     GLenum t = a.u32(); GLint l = a.s32(); GLenum ifmt = a.u32(); GLint x = a.s32(), y = a.s32();
@@ -1126,6 +1150,8 @@ bool load_gl() {
     if (ok && !g_shader) tint_init();
     const char* ext = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
     g_fog_radial = ext && std::strstr(ext, "GL_NV_fog_distance");
+    g_decode_s3tc = !(ext && std::strstr(ext, "GL_EXT_texture_compression_s3tc")) || std::getenv("GANGSTAR_DECODE_S3TC");
+    LOG("GL: DXT textures %s", g_decode_s3tc ? "decoded to RGBA (no S3TC on this GPU, or forced)" : "uploaded as they are");
     LOG("GL: fog distance %s", g_fog_radial ? "radial (NV_fog_distance)" : "by depth plane");
     if (ok) post::init();  // settings come from the game (post::set_settings)
     return ok;
@@ -1235,8 +1261,7 @@ void replace_compressed_levels(unsigned tex, unsigned format, const std::vector<
     if (g_unit != 0) p_glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex);
     for (size_t i = 0; i < levels.size(); ++i)
-        p_glCompressedTexImage2D(GL_TEXTURE_2D, GLint(i), format, levels[i].w, levels[i].h, 0, levels[i].size,
-                                 levels[i].data);
+        upload_compressed(GL_TEXTURE_2D, GLint(i), format, levels[i].w, levels[i].h, GLsizei(levels[i].size), levels[i].data);
     glBindTexture(GL_TEXTURE_2D, g_bound_2d[0]);
     if (g_unit != 0) p_glActiveTexture(GL_TEXTURE0 + g_unit);
 }

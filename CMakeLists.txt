@@ -38,6 +38,7 @@ add_executable(gangstar
     src/gl/gles1.cpp
     src/gl/post.cpp
     src/gl/ffp.cpp
+    src/gl/s3tc.cpp
     src/input/input.cpp
     src/settings/settings.cpp
     src/game/mods.cpp

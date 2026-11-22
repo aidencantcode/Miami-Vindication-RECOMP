@@ -1152,6 +1152,11 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   is ~30 m above its ground; the fog height now comes from the player's feet, and there is no ground
   fog without a player near the camera. The effects' camera-view pick read client-array state from
   GL, which shader mode does not set; it asks ffp now.
+- **Step 2 done: DXT decoding** (`src/gl/s3tc`): DXT1 RGB / RGBA (punch-through alpha), DXT3, DXT5
+  decoded to RGBA8 at upload when the GPU lacks `GL_EXT_texture_compression_s3tc` (Adreno, Mali),
+  also for sub-image updates and the night-texture re-uploads. `GANGSTAR_DECODE_S3TC=1` forces it on
+  desktop: noon and night (84 night textures) look the same. Costs more texture memory (DXT1 8×,
+  DXT5 4×), fine on 8-12 GB handhelds; transcoding to ETC2 would save it if ever needed.
 
 ### 5C.6 Dynamic lights (done 2026-11-22, Q9)
 - The game draws every light it shows as additive sprites from one light-effects atlas (texture 92 in

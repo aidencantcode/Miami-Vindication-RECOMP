@@ -315,7 +315,7 @@ Queue:
   - ✅ 10.0 Toolchain installed (SDK, NDK r27c, CMake; NOTES 5B). No accelerated emulator (needs a reboot
     / admin): device tests are the owner's.
   - ✅ 10.1 Shader renderer (`src/gl/ffp`, da51b4d), verified identical on Windows (`renderer = shader`).
-  - 10.2 DXT (S3TC) software decode for GPUs without it (Adreno, Mali), testable on Windows by forcing it.
+  - ✅ 10.2 DXT (S3TC) software decode for GPUs without it (Adreno, Mali), verified on Windows (forced).
   - 10.3 Portable platform code: guest memory (mmap), recompiled-code fault handling (signals), no
     Unicorn in the Android build, GL entry points from GLES 3 directly, data / save paths.
   - 10.4 Android build: CMake + NDK for arm64-v8a (and x86_64 for emulators), SDL2 from source.
