@@ -1034,12 +1034,34 @@ H(tex_image_2d) {
     GLenum f = a.u32(), ty = a.u32();
     if (l == 0) g_dbg_tex_size[bound_tex0()] = {w, h};
     if (l == 0 && t == GL_TEXTURE_2D) ffp::set_texture_format(g_bound_2d[g_unit], f);
-    glTexImage2D(t, l, ifmt, w, h, b, f, ty, host(c, a.u32()));
+    const void* px = host(c, a.u32());
+#ifdef GANGSTAR_GLES
+    // GLES 3 takes BGRA only through an extension with stricter rules: swap to RGBA instead.
+    static std::vector<uint8_t> rgba;
+    if (f == GL_BGRA && ty == GL_UNSIGNED_BYTE && px) {
+        rgba.assign(static_cast<const uint8_t*>(px), static_cast<const uint8_t*>(px) + size_t(w) * h * 4);
+        for (size_t i = 0; i < rgba.size(); i += 4) std::swap(rgba[i], rgba[i + 2]);
+        px = rgba.data();
+        f = GL_RGBA;
+        ifmt = GL_RGBA;
+    }
+#endif
+    glTexImage2D(t, l, ifmt, w, h, b, f, ty, px);
 }
 H(tex_subimage_2d) {
     GLenum t = a.u32(); GLint l = a.s32(), x = a.s32(), y = a.s32(); GLsizei w = a.s32(), h = a.s32();
     GLenum f = a.u32(), ty = a.u32();
-    glTexSubImage2D(t, l, x, y, w, h, f, ty, host(c, a.u32()));
+    const void* px = host(c, a.u32());
+#ifdef GANGSTAR_GLES
+    static std::vector<uint8_t> rgba;
+    if (f == GL_BGRA && ty == GL_UNSIGNED_BYTE && px) {  // see tex_image_2d
+        rgba.assign(static_cast<const uint8_t*>(px), static_cast<const uint8_t*>(px) + size_t(w) * h * 4);
+        for (size_t i = 0; i < rgba.size(); i += 4) std::swap(rgba[i], rgba[i + 2]);
+        px = rgba.data();
+        f = GL_RGBA;
+    }
+#endif
+    glTexSubImage2D(t, l, x, y, w, h, f, ty, px);
 }
 // DXT on GPUs without S3TC (Adreno, Mali): decoded to RGBA8 at upload (GANGSTAR_DECODE_S3TC=1
 // forces it on desktop for testing).

@@ -91,6 +91,13 @@ void Input::init(const GameCalls& g, int game_w, int game_h, const settings::Set
     for (int i = 0; i < SDL_NumJoysticks() && !pad_; ++i)
         if (SDL_IsGameController(i)) pad_ = SDL_GameControllerOpen(i);
     if (pad_) LOG("input: controller \"%s\"", SDL_GameControllerName(pad_));
+    tilt_handheld_ = s.tilt_axes != "phone";
+    tilt_invert_ = s.tilt_invert;
+#ifdef __ANDROID__
+    for (int i = 0; i < SDL_NumSensors() && !accel_; ++i)
+        if (SDL_SensorGetDeviceType(i) == SDL_SENSOR_ACCEL) accel_ = SDL_SensorOpen(i);
+    LOG("input: accelerometer %s", accel_ ? "open (tilt steering)" : "not found");
+#endif
 }
 
 void Input::apply_settings(const settings::Settings& s) {
@@ -98,6 +105,8 @@ void Input::apply_settings(const settings::Settings& s) {
     mouse_look_ = s.mouse_look;
     mouse_sens_ = std::clamp(s.mouse_sensitivity, 0.05f, 10.0f);
     invert_y_ = s.invert_camera_y;
+    tilt_handheld_ = s.tilt_axes != "phone";
+    tilt_invert_ = s.tilt_invert;
 }
 
 void Input::release_all() {
@@ -269,6 +278,43 @@ void Input::handle(const SDL_Event& ev) {
         case SDL_MOUSEWHEEL:
             mouse_wheel(ev.wheel.y);
             break;
+        case SDL_SENSORUPDATE: {
+            // The device's accelerometer -> the game's tilt steering, unless a pad / keys steer
+            // (tilting_: virtual steering). The game expects a portrait phone held sideways; handhelds
+            // and tablets are landscape-native, so their axes are swapped (untested on a device:
+            // tilt_invert flips the steering if it turns the wrong way).
+            if (!accel_ || SDL_SensorGetInstanceID(accel_) != ev.sensor.which || tilting_) break;
+            const float* d = ev.sensor.data;
+            float x = d[0], y = d[1];
+            if (tilt_handheld_) {
+                x = -d[1];
+                y = d[0];
+            }
+            if (tilt_invert_) y = -y;
+            accelerometer(x, y, d[2]);
+            break;
+        }
+        case SDL_FINGERDOWN:
+        case SDL_FINGERMOTION:
+        case SDL_FINGERUP: {
+            // Real touchscreens (Android): each finger is its own pointer, passed straight to the game
+            // like the phone did. SDL's coordinates are 0..1 across the window.
+            int slot = -1;
+            for (int i = 0; i < kFingers; ++i)
+                if (finger_[i] == ev.tfinger.fingerId && finger_down_[i]) slot = i;
+            if (ev.type == SDL_FINGERDOWN && slot < 0)
+                for (int i = 0; i < kFingers && slot < 0; ++i)
+                    if (!finger_down_[i]) slot = i;
+            if (slot < 0) break;
+            last_device_ = Device::Touch;
+            cursor_on_ = false;
+            to_game(int(ev.tfinger.x * win_w_), int(ev.tfinger.y * win_h_), &gx, &gy);
+            const int action = ev.type == SDL_FINGERDOWN ? 1 : ev.type == SDL_FINGERUP ? 0 : 2;
+            touch(action, gx, gy, slot);
+            finger_[slot] = ev.tfinger.fingerId;
+            finger_down_[slot] = ev.type != SDL_FINGERUP;
+            break;
+        }
         case SDL_KEYDOWN:
             if (!ev.key.repeat) last_device_ = Device::Keyboard;
             break;
@@ -384,7 +430,7 @@ GameInput Input::gather(double dt) {
     gi.act[A_ACCELERATE] |= driving_ && (k(SDL_SCANCODE_W) || k(SDL_SCANCODE_UP));
     gi.act[A_BRAKE] |= driving_ && (k(SDL_SCANCODE_S) || k(SDL_SCANCODE_DOWN) || k(SDL_SCANCODE_SPACE));
     gi.act[A_CONFIRM] |= k(SDL_SCANCODE_RETURN) || k(SDL_SCANCODE_KP_ENTER);
-    gi.act[A_BACK] |= k(SDL_SCANCODE_ESCAPE) || k(SDL_SCANCODE_BACKSPACE);
+    gi.act[A_BACK] |= k(SDL_SCANCODE_ESCAPE) || k(SDL_SCANCODE_BACKSPACE) || k(SDL_SCANCODE_AC_BACK);  // AC_BACK: Android
     gi.act[A_MENU] = k(SDL_SCANCODE_TAB);
 
     // menus: the d-pad moves the cursor too
@@ -412,7 +458,10 @@ void Input::drive_gameplay(const std::vector<mods::Control>& controls, const Gam
         if (c.visible && !std::strcmp(c.kind, "AnalogStick")) stick = &c;
         if (c.visible && (!std::strcmp(c.kind, "Wheel") || !std::strcmp(c.kind, "SlideControl"))) steer = &c;
     }
-    const bool tilt = driving_ && mods::steering_mode(*g_.rt) == mods::kSteerTilt;
+    // Virtual steering in tilt mode, except when playing by touch on a device with a real
+    // accelerometer (Android): then the device's tilt steers, as on the phone.
+    const bool tilt = driving_ && mods::steering_mode(*g_.rt) == mods::kSteerTilt &&
+                      !(accel_ && last_device_ == Device::Touch);
     if (tilt) {
         // Tilt steering: the stick / keys set the steering directly (mods::set_virtual_steering);
         // a neutral accelerometer reading (phone level in landscape) keeps the game's handler running.

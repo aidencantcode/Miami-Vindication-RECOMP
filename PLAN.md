@@ -316,11 +316,12 @@ Queue:
     / admin): device tests are the owner's.
   - ✅ 10.1 Shader renderer (`src/gl/ffp`, da51b4d), verified identical on Windows (`renderer = shader`).
   - ✅ 10.2 DXT (S3TC) software decode for GPUs without it (Adreno, Mali), verified on Windows (forced).
-  - 10.3 Portable platform code: guest memory (mmap), recompiled-code fault handling (signals), no
+  - ✅ 10.3 Portable platform code: guest memory (mmap), recompiled-code fault handling (signals), no
     Unicorn in the Android build, GL entry points from GLES 3 directly, data / save paths.
-  - 10.4 Android build: CMake + NDK for arm64-v8a (and x86_64 for emulators), SDL2 from source.
-  - 10.5 App: SDL activity, manifest, Gradle, game data location (the owner copies the data folder to
-    the device), touch / tilt / controllers, saves in the app folder; APK builds.
+  - ✅ 10.4 Android build: CMake + NDK for arm64-v8a, SDL2 from source.
+  - ✅ 10.5 App: SDL activity, manifest, Gradle, game data location (the owner copies the files to the
+    device, android/README.md), multi-touch / tilt / controllers, saves in the app folder; the APK
+    builds (`tools/build_android.ps1`). **Not yet run on a device** (no emulator acceleration here).
   - 10.6 Speed work for handhelds (measure on device first).
 
 ## ⏸ Phase 5: fixes from play-testing, then the Android port (planned 2026-11-20; owner says when to start)

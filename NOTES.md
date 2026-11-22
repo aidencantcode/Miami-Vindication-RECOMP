@@ -1157,6 +1157,31 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   also for sub-image updates and the night-texture re-uploads. `GANGSTAR_DECODE_S3TC=1` forces it on
   desktop: noon and night (84 night textures) look the same. Costs more texture memory (DXT1 8×,
   DXT5 4×), fine on 8-12 GB handhelds; transcoding to ETC2 would save it if ever needed.
+- **Steps 3-5: the APK builds** (`tools/build_android.ps1` → `build/android/gangstar-arm64.apk`,
+  23 MB: stripped libmain.so 22 MB + libSDL2.so; nothing of the game inside). Not run on a device yet.
+  - CMake `ANDROID` branch: libmain.so (SDL's activity loads it), defines GANGSTAR_GLES +
+    GANGSTAR_NO_UNICORN + GANGSTAR_HAVE_RECOMP; SDL2 2.32.10, Dear ImGui 1.93 (OpenGL ES 3 backend)
+    and stb are copied from the vcpkg build tree into `third_party/` (git-ignored); the recompiled C
+    builds with clang `-O2 -ffp-contract=off -fexceptions -funwind-tables` (exceptions must unwind
+    through generated C frames). arm64 compile of everything: a few minutes.
+  - `android/`: Gradle 8.7 + AGP 8.5.2, package `com.recomp.gangstar`, minSdk 26, SDL's Java
+    activity taken from `third_party/SDL2/android-project`, landscape, GLES 3 required, vector icon.
+    Release builds are signed with the debug key (personal builds).
+  - Platform code: `gl/glapi.h` (GLES 3 + GLES 1.1 headers; desktop-only names mapped; entry points
+    direct), guest memory via mmap/mprotect rounded to the system page size (16 KB-page devices),
+    POSIX crash handler naming the guest address, logcat logging, main() on a 64 MB-stack thread
+    (recompiled guest calls nest as C calls), files in the app folder on shared storage
+    (`Android/data/com.recomp.gangstar/files`: libGangster2.so, sound_table.txt,
+    gameloft/games/Gangstar2/; saves, settings and the log are written there; a message box lists
+    missing files), POSIX libc fixes, BGRA uploads swizzled to RGBA on GLES.
+  - Input: multi-touch (each finger its own game pointer, SDL touch↔mouse emulation off), Android
+    Back = the game's back, the accelerometer feeds the game's tilt steering when playing by touch
+    (axes swapped for landscape-native handhelds: `[controls] tilt_axes = handheld | phone`,
+    `tilt_invert`; direction unverified without a device), controllers as on Windows.
+  - Shaders validated offline as GLSL ES 3.00 and GLSL 3.30 with Khronos glslang 16.6.0
+    (`tools/check_shaders.py`; glslang unpacked to `C:\Users\aiden\devtools\glslang`): all pass.
+  - **Open (needs the owner's device):** first run on a Retroid / Odin: startup, the GLES driver,
+    frame rate, touch layout, tilt direction, audio. Then 10.6 speed work from measurements.
 
 ### 5C.6 Dynamic lights (done 2026-11-22, Q9)
 - The game draws every light it shows as additive sprites from one light-effects atlas (texture 92 in

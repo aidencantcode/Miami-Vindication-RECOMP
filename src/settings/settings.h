@@ -51,6 +51,8 @@ struct Settings {
     float stick_deadzone = 0.2f;
     bool tap_to_target = false;             // the phone's tap-on-a-person lock and automatic lock while shooting (touchscreens)
     float manual_aim_spread = 0.25f;        // aiming with the crosshair: fraction of the game's random bullet spread
+    std::string tilt_axes = "handheld";     // Android tilt steering: handheld (landscape-native screen) | phone (portrait-native)
+    bool tilt_invert = false;               // Android tilt steering turns the wrong way: flip it
 
     // [audio]
     float master_volume = 1.0f;             // 0..1

@@ -136,6 +136,10 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
         if (!settings::apply_override(&cfg, o)) FATAL("--set %s: unknown setting (expected section.key=value)", o.c_str());
 
     // ---- window + GL ------------------------------------------------------------------------------
+    // Touchscreen fingers are handled as fingers (input.cpp, multi-touch); no extra mouse clicks from
+    // them, and no fake touches from the mouse.
+    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+    SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_SENSOR) != 0) FATAL("SDL_Init: %s", SDL_GetError());
 #ifdef GANGSTAR_GLES
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);  // Android: GLES 3.0
@@ -501,6 +505,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
             int rx, ry, rw, rh;
             gles1::vfb_present(dw, dh, fit_of(cfg.fit), cfg.smooth_scaling, &rx, &ry, &rw, &rh);
             in.set_viewport(rx, ry, rw, rh);
+            in.set_window_size(dw, dh);
             if (in.cursor_visible()) {  // controller menu cursor
                 const int cx = rx + int(in.cursor_x() * rw / kW), cy = ry + int(in.cursor_y() * rh / kH);
                 const int s = std::max(3, rh / 160);  // arm thickness

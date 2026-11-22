@@ -52,6 +52,7 @@ class Input {
 public:
     void init(const GameCalls& g, int game_w, int game_h, const settings::Settings& s);
     void set_viewport(int x, int y, int w, int h);  // where the game image sits in the window
+    void set_window_size(int w, int h) { win_w_ = w; win_h_ = h; }  // for touch coordinates (0..1)
 
     void handle(const SDL_Event& ev);   // window / device events
     void update(double dt);             // once per frame, before nativeRender
@@ -128,6 +129,13 @@ private:
     bool weapon_prev_ = false, weapon_next_ = false;  // last frame's weapon actions (press edges)
     bool reload_was_ = false, lock_toggle_was_ = false;
     bool skey_[SDL_NUM_SCANCODES] = {};         // scripted keyboard state (OR-ed with the real keys)
+    // Real fingers (touchscreens): SDL finger id per game pointer id 0..4.
+    static constexpr int kFingers = 5;
+    SDL_FingerID finger_[kFingers] = {};
+    bool finger_down_[kFingers] = {};
+    int win_w_ = 1280, win_h_ = 720;
+    SDL_Sensor* accel_ = nullptr;               // the device accelerometer (Android)
+    bool tilt_handheld_ = true, tilt_invert_ = false;
 
     struct Step { int frame; double time; std::string cmd; std::string a; int x, y; bool done; };
     std::vector<Step> script_;

@@ -242,6 +242,13 @@ Two bugs it found, each within minutes:
 
 </details>
 
+## Android (arm64 handhelds)
+
+The same code builds as an Android app with a GLES 3 renderer: `tools\build_android.ps1` makes
+`build\android\gangstar-arm64.apk`. The APK holds none of the game's files; see
+[android/README.md](android/README.md) for copying your game files onto the device. Not tested on a
+device yet.
+
 ## Building
 
 **You need:**
