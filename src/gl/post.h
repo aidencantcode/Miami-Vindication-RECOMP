@@ -39,6 +39,9 @@ struct Scene {
 
 bool init();                        // after the GL context exists: load entry points, build shaders
 void set_settings(const Settings& s);
+// Game clock (minutes since midnight) for the sun haze direction: the game's light 0 is a point at
+// the origin, not the sun. World axes (from the minimap and the sea): +x east, +y north, +z up.
+void set_time_of_day(int minute);
 bool active();                      // any pass is on (else run() does nothing)
 void run(const Scene& scene);
 

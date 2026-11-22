@@ -462,6 +462,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 const auto t_game = Clock::now();
                 nighttex::update(cfg.night_textures, int(rt.mem().r32(daytime_obj + 4)),  // DayTime state, ms of day
                                 int(rt.mem().r32(daytime_obj + 8) / 60000), cfg.night_people_lift);
+                post::set_time_of_day(int(rt.mem().r32(daytime_obj + 8) / 60000));
                 gles1::FogConfig fog;
                 fog.atmospheric = cfg.fog == "atmospheric";
                 fog.strength = cfg.fog_strength;

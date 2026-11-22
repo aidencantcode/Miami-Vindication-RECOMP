@@ -1120,6 +1120,20 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
 - Debug: `GANGSTAR_POST_TEST=invert` (3D scene inverted, HUD untouched: verified) and `=depth`
   (eye distance reconstructed from depth, both ranges: verified continuous).
 
+### 5C.4 step 2 Ground fog and sun haze (done 2026-11-22, Q8)
+- In the composite pass: world position from depth (both depth ranges, tan(fov/2), inverse of the
+  camera view taken from the first city batch, which is in world space: checked, the recovered camera
+  74843 / −22734 / 450 equals the FollowCamera position). Exponential height fog integrated along the
+  view ray (density 1.2e-5 at the reference height ~4 m below the camera, halving every ~10 m), at most
+  85-90%, scaled by `[graphics] height_fog_amount`; the sky counts as a far point, so the horizon
+  hazes and the sky above does not. The fog colour is the game's time-of-day fog colour, shifted
+  toward warm orange near the sun when that colour is warm (sunrise / sunset).
+- The game's light 0 is a point light at the origin (logged), not the sun. The sun direction comes
+  from the game clock instead: east (+x, the sea side) at 6:00, south at 12:30, west at 19:00. World
+  axes: the minimap shows the beach boulevard view facing north (+y), the sea is east (+x).
+- Bloom is 1 + 1.5 × the fog amount stronger where the fog is thick.
+- Checked at 12:00 (distant towers and sea horizon soften) and 17:40 (warm amber haze over the sea).
+
 ### 5C.5 Bloom (done 2026-11-22, Q7)
 - `post.cpp`: bright pass at half size (soft threshold on the brightest channel, 13 taps), 6-level
   dual-filter blur (down, then up with every scale added into the level above, RGBA16F), composite

@@ -494,7 +494,9 @@ void post_before_draw(GLuint tex0) {
         s.near_f = proj_far(p);
         s.tan_half_x = 1.0f / p.m[0];
         s.tan_half_y = 1.0f / p.m[5];
-        if (!g_post_view_seen && is_world_tex(tex0)) {
+        // City batches: normals, no colour array (people / cars / props have colour arrays), drawn in
+        // world space, so their modelview is the camera's view.
+        if (!g_post_view_seen && (is_world_tex(tex0) || (glIsEnabled(GL_NORMAL_ARRAY) && !glIsEnabled(GL_COLOR_ARRAY)))) {
             std::memcpy(s.view, g_mv.back().m, sizeof s.view);
             s.view_valid = g_post_view_seen = true;
         }

@@ -149,18 +149,59 @@ void main() {
 }
 )";
 
-// Final image: the scene (fog step 2 goes here, Q8) plus the glow.
+// Final image: the scene with ground fog / sun haze (fog step 2, 5C.4) plus the glow, which grows
+// where the air is thick.
 const char* kCompositeFS = R"(
 in vec2 v_uv;
 out vec4 o_color;
 uniform sampler2D u_scene;
 uniform sampler2D u_bloom;
+uniform sampler2D u_depth;
 uniform float u_bloom_on;
 uniform float u_bloom_intensity;
+uniform float u_fog_on;
+uniform vec4 u_ranges;     // split
+uniform vec4 u_nearfar;    // near n, near f, far n, far f
+uniform vec2 u_tan;        // tan(fov/2) x, y
+uniform mat4 u_inv_view;   // eye -> world
+uniform vec3 u_fog_color;
+uniform vec3 u_sun_dir;    // world, toward the sun
+uniform float u_sun_warm;  // 0..1: sunrise / sunset
+uniform vec4 u_hf;         // density at the reference height, falloff per unit, reference height, amount
+float eye_z(float d) {
+    float split = u_ranges.x;
+    float n, f, ndc;
+    if (d <= split) { n = u_nearfar.x; f = u_nearfar.y; ndc = d / split * 2.0 - 1.0; }
+    else { n = u_nearfar.z; f = u_nearfar.w; ndc = (d - split) / (1.0 - split) * 2.0 - 1.0; }
+    float m10 = (f + n) / (f - n), m14 = -2.0 * f * n / (f - n);
+    return m14 / (ndc - m10);
+}
 void main() {
     vec3 c = texture(u_scene, v_uv).rgb;
+    float fog = 0.0;
+    if (u_fog_on > 0.5) {
+        float d = texture(u_depth, v_uv).r;
+        float z = d >= 0.99999 ? 200000.0 : eye_z(d);   // the sky: a far point along the ray
+        vec3 eye = vec3((v_uv.x * 2.0 - 1.0) * u_tan.x * z, (v_uv.y * 2.0 - 1.0) * u_tan.y * z, z);
+        vec3 cam = (u_inv_view * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+        vec3 world = (u_inv_view * vec4(eye, 1.0)).xyz;
+        vec3 ray = world - cam;
+        float dist = length(ray);
+        vec3 dir = ray / max(dist, 1e-3);
+        // Exponential height fog integrated along the ray: density(h) = a * exp(-b (h - h0)).
+        float a = u_hf.x, b = u_hf.y;
+        float dz = dir.z * b;
+        float along = abs(dz) > 1e-5 ? (1.0 - exp(-dz * dist)) / dz : dist;
+        float depth_amount = a * exp(-b * (cam.z - u_hf.z)) * along;
+        fog = clamp(1.0 - exp(-depth_amount), 0.0, 0.85) * u_hf.w;
+        fog = clamp(fog, 0.0, 0.9);
+        float sun = pow(max(dot(dir, u_sun_dir), 0.0), 8.0) * u_sun_warm;
+        vec3 sun_col = vec3(1.0, 0.62, 0.32);
+        vec3 col = mix(u_fog_color, sun_col, clamp(sun, 0.0, 1.0) * 0.8);
+        c = mix(c, col, fog);
+    }
     vec3 b = texture(u_bloom, v_uv).rgb * u_bloom_on;
-    c += b * u_bloom_intensity;
+    c += b * u_bloom_intensity * (1.0 + 1.5 * fog);
     o_color = vec4(c, 1.0);
 }
 )";
@@ -304,6 +345,36 @@ void pass_into(const Target& dst, GLuint prog, GLuint src_tex, float tx, float t
     draw_fullscreen();
 }
 
+// General 4x4 inverse (column-major), false if singular.
+bool invert4(const float* m, float* out) {
+    float inv[16];
+    inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
+    inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
+    inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
+    inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] - m[8] * m[6] * m[13] - m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
+    inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] - m[9] * m[3] * m[14] - m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
+    inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] + m[8] * m[3] * m[14] + m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
+    inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] - m[8] * m[3] * m[13] - m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
+    inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] + m[8] * m[2] * m[13] + m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
+    inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] + m[5] * m[3] * m[14] + m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
+    inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] - m[4] * m[3] * m[14] - m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
+    inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] + m[4] * m[3] * m[13] + m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
+    inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] - m[4] * m[2] * m[13] - m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
+    inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] - m[5] * m[3] * m[10] - m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
+    inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] + m[4] * m[3] * m[10] + m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
+    inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] - m[4] * m[3] * m[9] - m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
+    inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] + m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
+    const float det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+    if (std::abs(det) < 1e-12f) return false;
+    for (int i = 0; i < 16; ++i) out[i] = inv[i] / det;
+    return true;
+}
+
+// Ground fog parameters (world units are ~1 cm: the player is ~180 tall).
+constexpr float kFogFalloff = 1.0f / 1500.0f;   // density halves every ~10 m of height
+constexpr float kFogDensity = 1.2e-5f;          // ~30% extra haze over 300 m at the reference height
+constexpr float kFogRefBelowCamera = 400.0f;    // reference height: ~4 m below the camera (the street)
+
 // How dark the scene is (0 day .. 1 night), from the time-of-day fog colour: lights should glow a
 // lot at night while the bright daytime sky (as bright as a neon tube) should only glow a little.
 float g_night = 0;
@@ -348,6 +419,17 @@ bool init() {
 }
 
 void set_settings(const Settings& s) { g_set = s; }
+
+namespace {
+float g_sun_dir[3] = {-0.97f, 0.0f, 0.25f};
+}
+void set_time_of_day(int minute) {
+    // Rises in the east (+x) at 6:00, highest in the south at 12:30, sets in the west (-x) at 19:00.
+    const float k = std::clamp((minute / 60.0f - 6.0f) / 13.0f, -0.1f, 1.1f) * 3.14159265f;
+    float d[3] = {std::cos(k), -0.35f * std::sin(k), 0.12f + 0.9f * std::max(0.0f, std::sin(k))};
+    const float l = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    for (int i = 0; i < 3; ++i) g_sun_dir[i] = d[i] / l;
+}
 
 bool active() { return g_ok && (g_set.test != nullptr || g_set.bloom || g_set.height_fog); }
 
@@ -415,6 +497,29 @@ void run(const Scene& sc) {
             p_glUniform1i(uni(p, "u_bloom"), 1);
             p_glUniform1i(uni(p, "u_depth"), 2);
             p_glUniform1f(uni(p, "u_bloom_on"), bloom ? 1.0f : 0.0f);
+            // ground fog / sun haze
+            float inv_view[16];
+            const bool fog = g_set.height_fog && g_set.height_fog_amount > 0 && sc.view_valid && invert4(sc.view, inv_view);
+            p_glUniform1f(uni(p, "u_fog_on"), fog ? 1.0f : 0.0f);
+            if (fog) {
+                p_glUniform4f(uni(p, "u_ranges"), sc.split, 0, 0, 0);
+                p_glUniform4f(uni(p, "u_nearfar"), sc.near_n, sc.near_f, sc.far_n, sc.far_f);
+                p_glUniform2f(uni(p, "u_tan"), sc.tan_half_x, sc.tan_half_y);
+                p_glUniformMatrix4fv(uni(p, "u_inv_view"), 1, GL_FALSE, inv_view);
+                p_glUniform3f(uni(p, "u_fog_color"), sc.fog_color[0], sc.fog_color[1], sc.fog_color[2]);
+                const float* sun = g_sun_dir;  // from the game clock (set_time_of_day)
+                p_glUniform3f(uni(p, "u_sun_dir"), sun[0], sun[1], sun[2]);
+                // warm haze only when the time-of-day colour is warm (sunrise / sunset)
+                const float warm = std::clamp((sc.fog_color[0] - sc.fog_color[2]) * 4.0f, 0.0f, 1.0f);
+                p_glUniform1f(uni(p, "u_sun_warm"), warm);
+                p_glUniform4f(uni(p, "u_hf"), kFogDensity, kFogFalloff, inv_view[14] - kFogRefBelowCamera,
+                              std::clamp(g_set.height_fog_amount, 0.0f, 2.0f));
+                static int logged = 0;
+                if (logged++ % 1000 == 999)
+                    LOG("post: fog camera %.0f %.0f %.0f, sun %.2f %.2f %.2f warm %.2f, fog colour %.2f %.2f %.2f", inv_view[12],
+                        inv_view[13], inv_view[14], sun[0], sun[1], sun[2], warm, sc.fog_color[0], sc.fog_color[1],
+                        sc.fog_color[2]);
+            }
             // the up chain sums the levels: normalise so intensity means the same at any level count
             p_glUniform1f(uni(p, "u_bloom_intensity"),
                           g_set.bloom_intensity / float(std::max(1, g_level_count)) * 2.0f * (1.0f + 2.0f * g_night));
