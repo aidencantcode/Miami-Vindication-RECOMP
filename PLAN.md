@@ -284,6 +284,8 @@ Suggested order: shared root causes first (5A.0), then audio, then input, then t
   time-based (e.g. ≥ 2 game updates / ≥ 50 ms). Check whether the game's own logic misbehaves at
   high fps: its timer gives an integer-ms dt, which is only 2 ms at 500 fps. ✔ when the wheel
   switches weapons reliably at 60, 144 and unlimited fps.
+  **Done 2026-11-21** (NOTES §5A.0): "unlimited" stops at 1,000 fps, taps are time-based, wheel
+  notches are queued and spaced. Weapon switching itself was a separate problem (5A.7).
 - **5A.1 Sprint only works left/right.** Shift + A/D sprints, Shift + W/S does not. First
   suspicion: how the keyboard direction is placed on the virtual stick, or how the game decides
   "sprint" (stick magnitude/angle, or the sprint button only counting along one axis). Find the
@@ -346,7 +348,7 @@ Suggested order: shared root causes first (5A.0), then audio, then input, then t
 - Also still open from before: owner's call on Q11 (restore missing sounds by default), camera
   modes not yet tried in recomp mode, and Phase 4.6 speed work (matters most for Android).
 
-**5C Visual upgrades (owner's list, 2026-11-21; not started: after 5A, owner says when).**
+**5C Visual upgrades (owner's list, 2026-11-21; 5C.1 and 5C.4 step 1 done, the rest after 5A, owner says when).**
 The game tuned its distances for 2011 phones. Write every shader pass so it also runs on the GLES 3
 bridge planned for 5B. **SSAO dropped** (owner, 2026-11-21: small gain on this low-poly city, costly
 to tune).
@@ -361,6 +363,9 @@ to tune).
   brighter for readability (setting), and tint the unlit dynamic draws, leaving out headlights,
   glows, muzzle flashes, sky and HUD. First a night trace of which car/ped draws are lit.
   ✔ when people and cars sit in the night and sunset scene like the buildings do.
+  **Done 2026-11-22** (NOTES §5C.1): the game never turns on GL lighting for them (colours are
+  baked on the CPU), so the bridge tints those draws with the city's time-of-day colour, lifted by
+  `night_people_lift` (F1 → Graphics). Glows and additive effects are left out.
 - **5C.2 Draw distance slider does nothing.** Findings so far (NOTES §5C): it only applies at start
   (profile load), not at all with `quality = phone`, and it scales only the streaming radius and
   the low-res city boundary, which also set the fog range. It does not touch per-object LOD
@@ -379,6 +384,8 @@ to tune).
   colour. Step 2 (needs 5C.0): a depth-based fog pass with exponential falloff, height falloff
   (thicker near the ground and the sea) and a warm glow toward the sun at sunrise/sunset. Settings:
   strength, distance. ✔ with screenshots at noon, sunset, night.
+  **Step 1 done 2026-11-21** (NOTES §5C.4): exponential, radial fog in the game's colours, now also
+  on the near city, people and cars; `fog` and `fog_strength` in F1 → Graphics. Step 2 still open.
 - **5C.5 Bloom.** Bright parts glow: the night city's lit windows and street lights, neon, headlights,
   the sun and sky at sunset. Threshold, then a downsample/upsample blur chain, added back before the
   HUD (5C.0). Light scattered through the fog (5C.4) so lights glow more in thick air. Settings: on/off,
