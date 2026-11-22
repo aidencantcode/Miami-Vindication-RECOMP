@@ -322,7 +322,11 @@ Queue:
   - ✅ 10.5 App: SDL activity, manifest, Gradle, game data location (the owner copies the files to the
     device, android/README.md), multi-touch / tilt / controllers, saves in the app folder; the APK
     builds (`tools/build_android.ps1`). **Not yet run on a device** (no emulator acceleration here).
-  - 10.6 Speed work for handhelds (measure on device first).
+  - 10.6 Speed work for handhelds (measure on device first). **Blocked on the owner's device.**
+
+Queue status (2026-11-22, end of the unattended run): Q0-Q9 and Q10.0-10.5 done and committed. Waiting
+for the owner: Q1e helicopter controls (needs a reachable helicopter), first device run of the APK,
+then 10.6 from device measurements.
 
 ## ⏸ Phase 5: fixes from play-testing, then the Android port (planned 2026-11-20; owner says when to start)
 
