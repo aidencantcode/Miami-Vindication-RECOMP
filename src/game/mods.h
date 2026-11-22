@@ -56,10 +56,21 @@ void set_virtual_steering(bool on, float steer);
 
 // Camera mode (classic | freeform | first_person), live.
 void set_camera_mode(const std::string& mode);
+// One physics step per frame instead of the game's fixed 60 Hz ([game] smooth_physics), live.
+void set_smooth_physics(bool on);
+// Scripted test helpers (input script "mod <name>"), run at the next frame(): nearcar.
+void debug_command(const std::string& cmd);
 
-// Aiming (PC scheme unless [controls] tap_to_target): no tap-to-target and no automatic lock;
-// auto-aim held (LT / middle mouse) locks the game's own pick, release unlocks.
-void set_aim_input(bool auto_aim, bool manual_aim);
+// Aiming (PC scheme unless [controls] tap_to_target): no tap-to-target; firing auto-aims at the
+// game's own pick (while held and 1 s after) unless aiming with the crosshair; a held lock (LT)
+// locks the game's pick until released.
+void set_aim_input(bool lock_held, bool manual_aim, bool firing);
+// Middle click: unlock if a target is locked, else lock the nearest until clicked again.
+void toggle_lock();
+// Reload the current weapon (Character::reloadWeapon, on foot).
+void reload();
+// Manual aim: fraction of the game's random bullet spread (0..1), live.
+void set_manual_aim_spread(float f);
 // Manual aim is on (crosshair, over-the-shoulder camera).
 bool manual_aiming();
 // Queue weapon switches (+1 next, -1 previous); done in frame() through Player::switchWeapon.

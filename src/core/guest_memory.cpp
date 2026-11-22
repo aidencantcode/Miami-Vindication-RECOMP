@@ -48,6 +48,12 @@ void GuestMemory::protect(uint32_t addr, uint32_t size, uint32_t prot) {
         if (l.on_protect) l.on_protect(addr, size, prot);
 }
 
+bool GuestMemory::host_writable(uint32_t addr, uint32_t size) {
+    const uint32_t a = addr & ~(kPage - 1), e = (addr + size + kPage - 1) & ~(kPage - 1);
+    DWORD old = 0;
+    return VirtualProtect(base_ + a, e - a, PAGE_READWRITE, &old) != 0;
+}
+
 const Region* GuestMemory::region_of(uint32_t addr) const {
     for (const Region& r : regions_)
         if (addr >= r.addr && addr - r.addr < r.size) return &r;

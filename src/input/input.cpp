@@ -44,11 +44,11 @@ const std::initializer_list<int> kActionTypes[A_COUNT] = {
     /*A_RADIO*/ {BT_RADIO_TOGGLE}, /*A_RADIO_NEXT*/ {BT_RADIO},
     // Weapons: the selector widget is not a HUD button; switched through mods::switch_weapon.
     /*A_WEAPON_NEXT*/ {}, /*A_WEAPON_PREV*/ {}, /*A_AIM*/ {}, /*A_AUTO_AIM*/ {},
-    /*A_CONFIRM*/ {}, /*A_BACK*/ {}, /*A_MENU*/ {}};
+    /*A_RELOAD*/ {}, /*A_LOCK_TOGGLE*/ {}, /*A_CONFIRM*/ {}, /*A_BACK*/ {}, /*A_MENU*/ {}};
 
 const char* kActionNames[A_COUNT] = {"attack", "enter_car", "interact", "accelerate", "brake", "cover", "sprint",
                                      "map", "radio", "radio_next", "weapon_next", "weapon_prev", "aim", "auto_aim",
-                                     "confirm", "back", "menu"};
+                                     "reload", "lock_toggle", "confirm", "back", "menu"};
 
 float axis(SDL_GameController* p, SDL_GameControllerAxis a) {
     return p ? std::clamp(SDL_GameControllerGetAxis(p, a) / 32767.0f, -1.0f, 1.0f) : 0.0f;
@@ -113,8 +113,9 @@ void Input::release_all() {
     cursor_pressed_ = false;
     rmb_down_ = false;
     rmb_dx_ = rmb_dy_ = 0;
-    rmb_held_ = mmb_held_ = false;
-    mods::set_aim_input(false, false);
+    rmb_held_ = mmb_held_ = lmb_attack_ = mmb_click_ = false;
+    std::fill(std::begin(skey_), std::end(skey_), false);
+    mods::set_aim_input(false, false, false);
     key_edge(AK_BACK, false, &prev_back_);
     key_edge(AK_MENU, false, &prev_menu_);
     if (tilting_) {
@@ -159,6 +160,8 @@ bool Input::to_game(int wx, int wy, int* gx, int* gy) const {
 }
 
 void Input::touch(int action, int x, int y, int pointer) {
+    static const bool trace = std::getenv("GANGSTAR_INPUT_TRACE") != nullptr;
+    if (trace) LOG("[trace] touch %s %d,%d id %d", action == 1 ? "down" : action == 2 ? "move" : "up", x, y, pointer);
     // (env, cls, action, x, y, jlong pointerId): y is the first stack slot, the jlong is 8-byte aligned.
     g_.rt->main_cpu().call(g_.rt->lib_func(kTouch), {g_.env, g_.cls_surface, uint32_t(action), uint32_t(x)},
                            {uint32_t(y), 0, uint32_t(pointer), 0});
@@ -195,6 +198,22 @@ void Input::key_edge(int code, bool now, bool* prev) {
 }
 
 // ---- events --------------------------------------------------------------------------------------
+void Input::mouse_button(int button, bool down) {
+    if (button == SDL_BUTTON_LEFT) lmb_attack_ = down;
+    if (button == SDL_BUTTON_RIGHT) rmb_held_ = down;
+    if (button == SDL_BUTTON_MIDDLE) {
+        if (down && !mmb_held_) mmb_click_ = true;
+        mmb_held_ = down;
+    }
+}
+
+void Input::mouse_wheel(int notches) {
+    // GTA Vice City: wheel down = next weapon, up = previous (in a car: next radio station).
+    // Notches are queued (a few at most) and sent as spaced taps, see gather().
+    if (notches < 0) wheel_next_ = std::min(wheel_next_ + 1, 3);
+    else if (notches > 0) wheel_prev_ = std::min(wheel_prev_ + 1, 3);
+}
+
 void Input::handle(const SDL_Event& ev) {
     int gx, gy;
     if (mouse_locked_) {  // mouse-look: motion turns the camera, left click attacks
@@ -204,14 +223,10 @@ void Input::handle(const SDL_Event& ev) {
                 rmb_dy_ += float(ev.motion.yrel) * game_h_ / std::max(vp_h_, 1);
                 return;
             case SDL_MOUSEBUTTONDOWN:
-            case SDL_MOUSEBUTTONUP: {
-                const bool down = ev.type == SDL_MOUSEBUTTONDOWN;
-                if (ev.button.button == SDL_BUTTON_LEFT) lmb_attack_ = down;
-                if (ev.button.button == SDL_BUTTON_RIGHT) rmb_held_ = down;
-                if (ev.button.button == SDL_BUTTON_MIDDLE) mmb_held_ = down;
+            case SDL_MOUSEBUTTONUP:
+                mouse_button(ev.button.button, ev.type == SDL_MOUSEBUTTONDOWN);
                 last_device_ = Device::Keyboard;
                 return;
-            }
             default: break;
         }
     }
@@ -252,8 +267,7 @@ void Input::handle(const SDL_Event& ev) {
             }
             break;
         case SDL_MOUSEWHEEL:
-            if (ev.wheel.y > 0) wheel_next_ = std::min(wheel_next_ + 1, 3);  // queue notches, a few at most
-            else if (ev.wheel.y < 0) wheel_prev_ = std::min(wheel_prev_ + 1, 3);
+            mouse_wheel(ev.wheel.y);
             break;
         case SDL_KEYDOWN:
             if (!ev.key.repeat) last_device_ = Device::Keyboard;
@@ -286,7 +300,7 @@ GameInput Input::gather(double dt) {
     GameInput gi;
     const Uint8* ks = SDL_GetKeyboardState(nullptr);
     auto pb = [&](SDL_GameControllerButton b) { return spad_[b] || (pad_ && SDL_GameControllerGetButton(pad_, b)); };
-    auto k = [&](SDL_Scancode s) { return ks[s] != 0; };
+    auto k = [&](SDL_Scancode s) { return ks[s] != 0 || skey_[s]; };
 
     // movement: left stick (real + scripted) and WASD / arrows
     float lx = axis(pad_, SDL_CONTROLLER_AXIS_LEFTX) + slx_, ly = axis(pad_, SDL_CONTROLLER_AXIS_LEFTY) + sly_;
@@ -306,8 +320,10 @@ GameInput Input::gather(double dt) {
     const bool rt = std::max(axis(pad_, SDL_CONTROLLER_AXIS_TRIGGERRIGHT), srt_) > 0.3f;
     const bool lt = std::max(axis(pad_, SDL_CONTROLLER_AXIS_TRIGGERLEFT), slt_) > 0.3f;
 
-    // controller (owner's scheme, PLAN 5A.4): RB fires everywhere; on foot RT = aim, LT = auto-aim,
-    // B = cover; in cars RT/LT are the pedals. Weapons on the d-pad, radio up (on/off) / down (next).
+    // controller (owner's scheme, PLAN 5A.4 / Q1): RB fires everywhere (auto-aiming at the nearest
+    // target, as on the phone, unless RT aims); on foot RT = aim with the crosshair, LT = hold a lock,
+    // B = cover, LB = reload; in cars RT/LT are the pedals. Weapons on the d-pad, radio up (on/off) /
+    // down (next).
     gi.act[A_ATTACK] = pb(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER);
     if (driving_) {
         gi.act[A_ACCELERATE] = rt;
@@ -316,6 +332,7 @@ GameInput Input::gather(double dt) {
         gi.act[A_AIM] = rt;
         gi.act[A_AUTO_AIM] = lt;
         gi.act[A_COVER] = pb(SDL_CONTROLLER_BUTTON_B);
+        gi.act[A_RELOAD] = pb(SDL_CONTROLLER_BUTTON_LEFTSHOULDER);
     }
     gi.act[A_WEAPON_NEXT] = pb(SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
     gi.act[A_WEAPON_PREV] = pb(SDL_CONTROLLER_BUTTON_DPAD_LEFT);
@@ -328,32 +345,44 @@ GameInput Input::gather(double dt) {
     gi.act[A_CONFIRM] = pb(SDL_CONTROLLER_BUTTON_A);
     gi.act[A_BACK] = pb(SDL_CONTROLLER_BUTTON_START) || (!gameplay_ && pb(SDL_CONTROLLER_BUTTON_B));
 
-    // keyboard + mouse: left button fires on foot, right button aims on foot and fires in cars,
-    // middle button auto-aims
-    gi.act[A_ATTACK] |= k(SDL_SCANCODE_SPACE) || k(SDL_SCANCODE_LCTRL) || lmb_attack_ || (driving_ && rmb_held_);
+    // keyboard + mouse, modelled on GTA Vice City PC (owner, Q1):
+    //   on foot: left click fires (auto-aiming like the phone), right click aims with the crosshair,
+    //            middle click locks onto the nearest target / unlocks; wheel = weapons; Shift or
+    //            Space sprints (the game has no jump); F / Enter = car; C or Q = cover; E = interact;
+    //            R = reload; 1 / 2 = weapons; M = map.
+    //   in a car: W / S = throttle / brake-reverse, Space = brake, left (or right) click and Left Ctrl
+    //            fire; R or the wheel = next radio station, T = radio on/off; F / Enter = get out.
+    gi.act[A_ATTACK] |= k(SDL_SCANCODE_LCTRL) || lmb_attack_ || (driving_ && rmb_held_);
     if (!driving_) {
         gi.act[A_AIM] |= rmb_held_;
-        gi.act[A_AUTO_AIM] |= mmb_held_;
+        gi.act[A_SPRINT] |= k(SDL_SCANCODE_LSHIFT) || k(SDL_SCANCODE_RSHIFT) || k(SDL_SCANCODE_SPACE);
+        gi.act[A_COVER] |= k(SDL_SCANCODE_C) || k(SDL_SCANCODE_Q);
+        gi.act[A_INTERACT] |= k(SDL_SCANCODE_E);
+        gi.act[A_RELOAD] |= k(SDL_SCANCODE_R);
+    } else {
+        gi.act[A_RADIO_NEXT] |= k(SDL_SCANCODE_R);
     }
-    gi.act[A_SPRINT] |= k(SDL_SCANCODE_LSHIFT) || k(SDL_SCANCODE_RSHIFT);
-    gi.act[A_ENTER_CAR] |= k(SDL_SCANCODE_F);
-    gi.act[A_INTERACT] |= k(SDL_SCANCODE_E);
-    gi.act[A_COVER] |= k(SDL_SCANCODE_Q);
+    gi.act[A_LOCK_TOGGLE] = mmb_click_;
+    mmb_click_ = false;
+    gi.act[A_ENTER_CAR] |= k(SDL_SCANCODE_F) || (gameplay_ && (k(SDL_SCANCODE_RETURN) || k(SDL_SCANCODE_KP_ENTER)));
     gi.act[A_MAP] |= k(SDL_SCANCODE_M);
-    gi.act[A_RADIO] |= k(SDL_SCANCODE_R);
-    gi.act[A_RADIO_NEXT] |= k(SDL_SCANCODE_T);
+    gi.act[A_RADIO] |= k(SDL_SCANCODE_T);
     gi.act[A_WEAPON_PREV] |= k(SDL_SCANCODE_1);
     gi.act[A_WEAPON_NEXT] |= k(SDL_SCANCODE_2);
     // Mouse wheel: each notch is one press (one frame "down" starts a one-shot tap), spaced so the
-    // tap ends and the button is released before the next notch presses again.
+    // tap ends and the button is released before the next notch presses again. In a car both
+    // directions change the radio station (the game only has "next").
     wheel_cooldown_ = std::max(0.0, wheel_cooldown_ - dt);
     if (wheel_cooldown_ == 0 && (wheel_next_ > 0 || wheel_prev_ > 0)) {
-        if (wheel_next_ > 0) { gi.act[A_WEAPON_NEXT] = true; --wheel_next_; }
-        else { gi.act[A_WEAPON_PREV] = true; --wheel_prev_; }
+        const bool next = wheel_next_ > 0;
+        if (next) --wheel_next_;
+        else --wheel_prev_;
+        if (driving_) gi.act[A_RADIO_NEXT] = true;
+        else gi.act[next ? A_WEAPON_NEXT : A_WEAPON_PREV] = true;
         wheel_cooldown_ = kTapSeconds + kTapGapSeconds;
     }
     gi.act[A_ACCELERATE] |= driving_ && (k(SDL_SCANCODE_W) || k(SDL_SCANCODE_UP));
-    gi.act[A_BRAKE] |= driving_ && (k(SDL_SCANCODE_S) || k(SDL_SCANCODE_DOWN));
+    gi.act[A_BRAKE] |= driving_ && (k(SDL_SCANCODE_S) || k(SDL_SCANCODE_DOWN) || k(SDL_SCANCODE_SPACE));
     gi.act[A_CONFIRM] |= k(SDL_SCANCODE_RETURN) || k(SDL_SCANCODE_KP_ENTER);
     gi.act[A_BACK] |= k(SDL_SCANCODE_ESCAPE) || k(SDL_SCANCODE_BACKSPACE);
     gi.act[A_MENU] = k(SDL_SCANCODE_TAB);
@@ -464,12 +493,15 @@ void Input::drive_gameplay(const std::vector<mods::Control>& controls, const Gam
         }
     }
 
-    // weapons (one switch per press) and auto-aim
+    // weapons and reload (once per press), lock toggle, aiming
     if (gi.act[A_WEAPON_NEXT] && !weapon_next_) mods::switch_weapon(1);
     if (gi.act[A_WEAPON_PREV] && !weapon_prev_) mods::switch_weapon(-1);
     weapon_next_ = gi.act[A_WEAPON_NEXT];
     weapon_prev_ = gi.act[A_WEAPON_PREV];
-    mods::set_aim_input(!driving_ && gi.act[A_AUTO_AIM], !driving_ && gi.act[A_AIM]);
+    if (gi.act[A_RELOAD] && !reload_was_) mods::reload();
+    reload_was_ = gi.act[A_RELOAD];
+    if (gi.act[A_LOCK_TOGGLE] && !driving_) mods::toggle_lock();
+    mods::set_aim_input(!driving_ && gi.act[A_AUTO_AIM], !driving_ && gi.act[A_AIM], gi.act[A_ATTACK]);
 
     // camera: a continuous drag on empty screen space that re-grabs before it reaches a control
     const float speed = 700.0f * mouse_sens_;  // game pixels per second at full deflection
@@ -495,7 +527,7 @@ void Input::drive_gameplay(const std::vector<mods::Control>& controls, const Gam
 }
 
 void Input::drive_menus(const GameInput& gi, double dt) {
-    mods::set_aim_input(false, false);
+    mods::set_aim_input(false, false, false);
     if (gi.mx != 0 || gi.my != 0) {
         cursor_on_ = true;
         cursor_x_ = std::clamp(cursor_x_ + float(gi.mx * 650.0 * dt), 0.0f, float(game_w_ - 1));
@@ -574,11 +606,12 @@ bool Input::parse_script(const std::string& script, std::string* err) {
         else s.frame = std::atoi(when.c_str());
         std::stringstream is(item.substr(colon + 1));
         is >> s.cmd;
-        if (s.cmd == "pad" || s.cmd == "stick") is >> s.a;
-        if (s.cmd == "key" || s.cmd == "pad") is >> s.x;
-        else is >> s.x >> s.y;
+        if (s.cmd == "pad" || s.cmd == "stick" || s.cmd == "mod" || s.cmd == "kb" || s.cmd == "mouse") is >> s.a;
+        if (s.cmd == "key" || s.cmd == "pad" || s.cmd == "kb" || s.cmd == "mouse") is >> s.x;
+        else if (s.cmd != "mod") is >> s.x >> s.y;
         const bool known = s.cmd == "tap" || s.cmd == "down" || s.cmd == "move" || s.cmd == "up" ||
-                           s.cmd == "key" || s.cmd == "pad" || s.cmd == "stick";
+                           s.cmd == "key" || s.cmd == "pad" || s.cmd == "stick" || s.cmd == "mod" ||
+                           s.cmd == "kb" || s.cmd == "mouse";
         if (!known || is.fail()) {
             *err = "bad input script item '" + item + "'";
             return false;
@@ -589,6 +622,19 @@ bool Input::parse_script(const std::string& script, std::string* err) {
         }
         if (s.cmd == "stick" && s.a != "l" && s.a != "r") {
             *err = "stick must be 'l' or 'r' in '" + item + "'";
+            return false;
+        }
+        if (s.cmd == "kb") {  // SDL key name, '_' for spaces (Space, R, Left_Shift)
+            std::string n = s.a;
+            std::replace(n.begin(), n.end(), '_', ' ');
+            s.y = int(SDL_GetScancodeFromName(n.c_str()));
+            if (s.y == SDL_SCANCODE_UNKNOWN) {
+                *err = "unknown key '" + s.a + "'";
+                return false;
+            }
+        }
+        if (s.cmd == "mouse" && s.a != "left" && s.a != "right" && s.a != "middle" && s.a != "wheel") {
+            *err = "mouse must be left, right, middle or wheel in '" + item + "'";
             return false;
         }
         script_.push_back(s);
@@ -623,6 +669,15 @@ void Input::run_script(int frame, double seconds) {
             last_device_ = Device::Pad;
             (s.a == "r" ? srx_ : slx_) = std::clamp(s.x, -100, 100) / 100.0f;
             (s.a == "r" ? sry_ : sly_) = std::clamp(s.y, -100, 100) / 100.0f;
+        } else if (s.cmd == "mod") {
+            mods::debug_command(s.a);
+        } else if (s.cmd == "kb") {
+            last_device_ = Device::Keyboard;
+            skey_[s.y] = s.x != 0;
+        } else if (s.cmd == "mouse") {  // mouse-look buttons, as if the cursor were locked
+            last_device_ = Device::Keyboard;
+            if (s.a == "wheel") mouse_wheel(s.x);
+            else mouse_button(s.a == "left" ? SDL_BUTTON_LEFT : s.a == "right" ? SDL_BUTTON_RIGHT : SDL_BUTTON_MIDDLE, s.x != 0);
         }
         break;
     }

@@ -8,6 +8,7 @@
 #include <string>
 #include <unordered_set>
 
+#include "core/layout.h"
 #include "core/log.h"
 #include "hle/overrides.h"
 #include "rt/runtime.h"
@@ -64,8 +65,20 @@ float f32_at(uint32_t a) {
 // at random: camera drags that barely move are released as taps at the drag anchor, and shooting
 // grabbed the nearest target. PC scheme: no taps, no automatic lock; holding auto-aim (LT / middle
 // mouse) asks the game for its target and locks it like a tap does, releasing unlocks.
+// Q1 (owner): firing without the crosshair auto-aims like the phone (the game's own pick, while fire
+// is held and briefly after, so semi-automatic taps don't swing the player back and forth); a middle
+// click locks the nearest target until clicked again.
 bool g_pc_aim = true;            // false: the phone's behaviour (touchscreens)
-bool g_auto_aim = false, g_auto_aim_was = false;
+bool g_auto_aim = false, g_auto_aim_was = false;  // lock held (LT)
+bool g_lock_toggled = false, g_toggle_request = false;  // middle click lock
+bool g_firing = false, g_fire_suppressed = false;
+double g_fire_hold = 0;           // seconds the fire auto-aim stays on after the last shot
+constexpr double kFireAimHold = 1.0;
+bool g_fire_auto = false;         // the game may pick the player's target (fire auto-aim active)
+bool g_reload_request = false;
+float g_manual_spread = 0.25f;    // manual aim: fraction of the game's random bullet spread
+uint32_t g_spread_char = 0;       // Character whose spread factors are scaled during Weapon::shoot
+uint32_t g_spread_saved[2] = {};
 bool g_allow_auto_target = false;  // our own getAttackableTarget call
 uint32_t g_gat_self = 0;           // getAttackableTarget's this (pre -> post)
 double g_reacquire = 0;            // seconds until the next auto-aim search
@@ -80,6 +93,15 @@ float g_aim_blend = 0;                   // 0 = game camera, 1 = over the should
 float g_aim_eye[3] = {}, g_aim_dir[3] = {};  // the aim camera (eye, unit view direction) last placed
 bool g_aim_valid = false;
 constexpr uint32_t kPlayerWeaponOut = 0x688;  // Player: weapon drawn / aiming (time, 0 = lowered)
+// GANGSTAR_INPUT_TRACE=1: per-frame log of the player and camera positions (input latency checks).
+const bool g_input_trace = std::getenv("GANGSTAR_INPUT_TRACE") != nullptr;
+int g_trace_frame = 0;
+uint32_t g_follow_cam = 0;  // the on-foot FollowCamera (last FollowCamera::update)
+// Physics step (see the Application::_Update hook): the literal-pool word in GS3DStuff::update.
+bool g_smooth_physics = true;
+std::vector<std::string> g_debug_cmds;  // scripted test commands (input "mod <name>"), run in frame()
+constexpr uint32_t kPhysicsStepLiteral = layout::kLibBase + 0x289dc0;
+constexpr uint32_t kPhysicsStep60 = 0x3c888889;  // 1/60 f, the game's value
 
 uint32_t player_obj(rt::Runtime& r);
 void shoulder_camera(cpu::Cpu& c, uint32_t cam, uint32_t node);
@@ -177,9 +199,31 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
         rt.hook_function(fn, {[](cpu::Cpu& c) { return g_hidden && is_control(c.reg(cpu::R0)); }, nullptr});
 
     // ---- statistics: the game's own time step (Application::_Update(int dt_ms)) --------------------
+    // Also smooth physics: GS3DStuff::update steps Box2D and every object's pre/post-physics with a
+    // fixed 1/60 s step from an accumulator, and nothing interpolates between steps, so above 60 fps
+    // people, cars and the camera following them only moved on some frames (every other frame at
+    // 120). The step is a literal-pool word that the recompiler reads from memory
+    // (codegen.py RUNTIME_LITERALS); setting it to this frame's dt gives one step per frame. Slow
+    // frames (dt > 1/60) keep the game's 1/60 steps.
+    g_smooth_physics = s.smooth_physics;
     rt.hook_function("_ZN11Application7_UpdateEi", {[](cpu::Cpu& c) {
-        g_step_ms += int32_t(c.reg(cpu::R1));
+        const int32_t dt = int32_t(c.reg(cpu::R1));
+        g_step_ms += dt;
         ++g_steps;
+        uint32_t bits = kPhysicsStep60;
+        if (g_smooth_physics && dt < 17) {
+            const float step = float(std::max(dt, 1)) / 1000.0f;  // the same float the game adds to its accumulator
+            std::memcpy(&bits, &step, 4);
+        }
+        auto& m = c.rt().mem();
+        static int writable = 0;  // 0 untried, 1 yes, -1 no
+        if (!writable) {  // here, not in install(): the recompiled backend protects code pages later
+            writable = m.host_writable(kPhysicsStepLiteral, 4) ? 1 : -1;
+            LOG("physics: step word %s (smooth_physics %s)", writable > 0 ? "patchable" : "NOT writable",
+                g_smooth_physics ? "on" : "off");
+        }
+        if (writable < 0) return false;
+        if (m.r32(kPhysicsStepLiteral) != bits) m.w32(kPhysicsStepLiteral, bits);
         return false;
     }, nullptr});
 
@@ -193,6 +237,7 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
     g_camera_mode = s.camera_mode;
     rt.hook_function("_ZN12FollowCamera6updateEf", {
         [](cpu::Cpu& c) {
+            g_follow_cam = c.reg(cpu::R0);
             if (g_camera_mode != "freeform") return false;
             auto& m = c.rt().mem();
             const uint32_t cam = c.reg(cpu::R0);
@@ -343,7 +388,7 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
         [](cpu::Cpu& c) {
             const uint32_t self = g_gat_self;
             g_gat_self = 0;
-            if (!g_pc_aim || g_allow_auto_target) return;
+            if (!g_pc_aim || g_allow_auto_target || g_fire_auto) return;
             const uint32_t p = player_obj(c.rt());
             if (p && self == p + 4) c.set_reg(cpu::R0, 0);
         }});
@@ -354,12 +399,33 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
     // as floats gave NaNs). The game points the gun at the far end of the crosshair ray, so close
     // targets were missed by the camera-to-gun offset; aim from the muzzle at what is under the
     // crosshair instead (a person's chest, a vehicle), else at the crosshair ray's far point.
+    // Spread: per axis rand(-100..100) * 0.01 * weapon (+0x4C) * shooter (Character +0x6C8, or +0x6CC
+    // when its vfunc +0x110 says so), added to the unit direction. Manual-aim shots scale both shooter
+    // factors by manual_aim_spread for the call (restored in the post hook).
+    g_manual_spread = std::clamp(s.manual_aim_spread, 0.0f, 1.0f);
     rt.hook_function("_ZN6Weapon5shootEP9CharacterN6glitch4core8vector3dIfEES5_b", {[](cpu::Cpu& c) {
+        if (g_input_trace) LOG("[trace] f%d Weapon::shoot", g_trace_frame);
         if (!g_pc_aim || g_aim_blend < 0.5f || !g_aim_valid) return false;
         auto& r = c.rt();
         auto& m = r.mem();
         const uint32_t p = player_obj(r);
         if (!p || c.reg(cpu::R1) != p + 4) return false;
+        if (!g_spread_char) {
+            g_spread_char = p + 4;
+            for (int i = 0; i < 2; ++i) {
+                const uint32_t a = g_spread_char + 0x6c8 + 4 * i;
+                g_spread_saved[i] = m.r32(a);
+                const float f = f32_at(a) * g_manual_spread;
+                uint32_t bits;
+                std::memcpy(&bits, &f, 4);
+                m.w32(a, bits);
+            }
+            static int logged_spread = 0;
+            if (logged_spread++ < 3)
+                LOG("aim: spread weapon %.3f, shooter %.3f / %.3f, scaled by %.2f", f32_at(c.reg(cpu::R0) + 0x4c),
+                    f32_at(g_spread_char + 0x6c8) / std::max(g_manual_spread, 1e-6f),
+                    f32_at(g_spread_char + 0x6cc) / std::max(g_manual_spread, 1e-6f), g_manual_spread);
+        }
         const uint32_t from_p = c.reg(cpu::R2), dir_p = c.reg(cpu::R3);
         if (!from_p || !dir_p) return false;
         float from[3], dir[3];
@@ -402,7 +468,11 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
                 from[1], from[2], dir[0], dir[1], dir[2], std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]),
                 nd[0], nd[1], nd[2], t ? "target" : "far point", t, l);
         return false;
-    }, nullptr});
+    }, [](cpu::Cpu& c) {
+        if (!g_spread_char) return;
+        for (int i = 0; i < 2; ++i) c.rt().mem().w32(g_spread_char + 0x6c8 + 4 * i, g_spread_saved[i]);
+        g_spread_char = 0;
+    }});
 
     // ---- virtual steering (tilt mode) -------------------------------------------------------------
     rt.hook_function("_ZN21DrivingControlHandler18handleAccelerationEPK14EvAcceleration", {[](cpu::Cpu& c) {
@@ -422,6 +492,8 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
 }
 
 void set_camera_mode(const std::string& mode) { g_camera_mode = mode; }
+void set_smooth_physics(bool on) { g_smooth_physics = on; }
+void debug_command(const std::string& cmd) { g_debug_cmds.push_back(cmd); }
 
 // The person or vehicle at the screen centre: the phone's tap picker (HudScreen::tappedTarget: a ray
 // from the camera through the point, hit boxes that grow with distance; people first, then
@@ -492,10 +564,14 @@ uint32_t target_at_screen_center(cpu::Cpu& c) {
                            {g_hud ? g_hud : scratch, scratch, scratch + 16}));
 }
 
-void set_aim_input(bool auto_aim, bool manual_aim) {
-    g_auto_aim = auto_aim;
-    g_manual_aim = manual_aim && !auto_aim;
+void set_aim_input(bool lock_held, bool manual_aim, bool firing) {
+    g_auto_aim = lock_held;
+    g_manual_aim = manual_aim && !lock_held;
+    g_firing = firing;
 }
+void toggle_lock() { g_toggle_request = true; }
+void reload() { g_reload_request = true; }
+void set_manual_aim_spread(float f) { g_manual_spread = std::clamp(f, 0.0f, 1.0f); }
 bool manual_aiming() { return g_aim_blend > 0.5f; }
 void switch_weapon(int step) { g_weapon_steps = std::clamp(g_weapon_steps + step, -3, 3); }
 
@@ -507,6 +583,45 @@ void frame(cpu::Cpu& c, double dt) {
         g_weapon_steps = 0;
         return;
     }
+    if (g_input_trace) {
+        static uint32_t scratch = 0;
+        if (!scratch) scratch = r.heap().alloc(16);
+        c.call(m.r32(m.r32(p + 4) + 0x5c), {scratch, p + 4});  // LevelObject::getPosition
+        float cp[3] = {}, cl[3] = {};
+        if (const uint32_t fc = g_follow_cam)
+            for (int i = 0; i < 3; ++i) cp[i] = f32_at(fc + 0x08 + 4 * i), cl[i] = f32_at(fc + 0x14 + 4 * i);
+        LOG("[trace] f%d dt %.1f ms: player %.1f %.1f cam %.1f %.1f look %.1f %.1f yaw %.1f", ++g_trace_frame, dt * 1000,
+            f32_at(scratch), f32_at(scratch + 4), cp[0], cp[1], cl[0], cl[1],
+            std::atan2(cl[1] - cp[1], cl[0] - cp[0]) * 57.29578f);
+    }
+    // Scripted test commands. nearcar: put the player 2.5 m beside the nearest empty car (the game's
+    // Character::getClosestVehicleFrom, which also wants a clear line of sight), so a test can hold Y.
+    for (const std::string& cmd : g_debug_cmds) {
+        if (cmd == "nearcar") {
+            uint32_t v = uint32_t(c.call(r.lib_func("_ZNK9Character21getClosestVehicleFromEb"), {p + 4, 1}));
+            if (!v) v = uint32_t(c.call(r.lib_func("_ZNK9Character21getClosestVehicleFromEb"), {p + 4, 0}));
+            static uint32_t scratch = 0;
+            if (!scratch) scratch = r.heap().alloc(16);
+            if (v) {
+                c.call(m.r32(m.r32(v) + 0x5c), {scratch, v});  // LevelObject::getPosition
+                float pos[3];
+                for (int i = 0; i < 3; ++i) pos[i] = f32_at(scratch + 4 * i);
+                pos[1] += 250.0f;
+                m.write(scratch, pos, 12);
+                c.call(r.lib_func("_ZN9Character11SetPositionERKN6glitch4core8vector3dIfEE"), {p + 4, scratch});
+                LOG("test: player moved beside vehicle %08x at %.0f %.0f %.0f", v, pos[0], pos[1] - 250.0f, pos[2]);
+                // What the enter button does (OnFootControlHandler::handleEnterCarButton): Player+0x704 is
+                // the car the player may enter, normally set by a physics contact a teleport doesn't make.
+                m.w32(p + 0x704, v);
+                c.call(r.lib_func("_ZN6Player11initDrivingEb"), {p, 1});
+            } else {
+                LOG("test: nearcar: no vehicle found");
+            }
+        } else {
+            LOG("test: unknown command '%s'", cmd.c_str());
+        }
+    }
+    g_debug_cmds.clear();
     // Weapon switching: what the weapon selector's < > buttons call (handleSwitchWeaponButton).
     while (g_weapon_steps != 0) {
         const int step = g_weapon_steps > 0 ? 1 : -1;
@@ -514,24 +629,74 @@ void frame(cpu::Cpu& c, double dt) {
         c.call(r.lib_func("_ZN6Player12switchWeaponEib"), {p, uint32_t(step), 1});
         LOG("weapon: switch %+d", step);
     }
+    const bool in_vehicle = c.call(r.lib_func("_ZNK9Character12isInAVehicleEv"), {p + 4}) != 0;
+    if (g_reload_request && !in_vehicle) {
+        c.call(r.lib_func("_ZN9Character12reloadWeaponEv"), {p + 4});
+        LOG("weapon: reload");
+    }
+    g_reload_request = false;
     if (!g_pc_aim) return;
+    auto find_target = [&](const char** how) {
+        g_allow_auto_target = true;
+        uint32_t t = uint32_t(c.call(r.lib_func("_ZN9Character19getAttackableTargetEv"), {p + 4}));
+        g_allow_auto_target = false;
+        *how = "nearest attackable";
+        if (!t) t = target_at_screen_center(c), *how = "at the screen centre";
+        return t;
+    };
+    // Middle click: unlock if anything is locked, else lock the nearest target until clicked again
+    // (or until it is gone). Unlocking while fire is held also pauses the fire auto-aim until release.
+    uint32_t target = m.r32(p + kPlayerTarget);
+    static uint32_t last_target = 0;
+    if (target != last_target) {
+        LOG("aim: target %08x -> %08x", last_target, target);
+        last_target = target;
+    }
+    if (g_toggle_request && !in_vehicle) {
+        if (target) {
+            c.call(r.lib_func("_ZN6Player12delockTargetEv"), {p});
+            g_lock_toggled = false;
+            g_fire_suppressed = g_firing;
+            g_fire_hold = 0;
+            LOG("aim: lock off (middle click)");
+        } else {
+            const char* how;
+            if (const uint32_t t = find_target(&how)) {
+                c.call(r.lib_func("_ZN6Player10lockTargetEP11LevelObjectb"), {p, t, 1});
+                g_lock_toggled = true;
+                LOG("aim: lock on %08x (middle click, %s)", t, how);
+            } else {
+                LOG("aim: lock: nothing to lock onto");
+            }
+        }
+        target = m.r32(p + kPlayerTarget);
+    }
+    g_toggle_request = false;
+    if (g_lock_toggled && !target) {
+        g_lock_toggled = false;
+        LOG("aim: lock off (target gone)");
+    }
+    // Fire auto-aim: while fire is held (and a moment after), the game picks the target itself
+    // (Player::updateLockTarget -> lockTarget(t, false)), exactly as on the phone; not while aiming
+    // with the crosshair or while a lock is held/toggled.
+    if (!g_firing) g_fire_suppressed = false;
+    const bool fire_now = g_firing && !g_fire_suppressed && !g_manual_aim;
+    g_fire_hold = fire_now ? kFireAimHold : std::max(0.0, g_fire_hold - dt);
+    const bool fire_auto = g_fire_hold > 0 && !g_manual_aim && !g_auto_aim && !g_lock_toggled;
+    if (fire_auto != g_fire_auto) LOG("aim: fire auto-aim %s", fire_auto ? "on" : "off");
+    g_fire_auto = fire_auto;
     // Auto-aim: lock the game's own pick (as a tap would) while held; retry while nothing is locked.
-    const uint32_t target = m.r32(p + kPlayerTarget);
     if (g_auto_aim) {
         g_reacquire -= dt;
         if (!target && g_reacquire <= 0) {
-            g_allow_auto_target = true;
-            uint32_t t = uint32_t(c.call(r.lib_func("_ZN9Character19getAttackableTargetEv"), {p + 4}));
-            g_allow_auto_target = false;
-            const char* how = "nearest attackable";
-            if (!t) t = target_at_screen_center(c), how = "at the screen centre";
-            if (t) {
+            const char* how;
+            if (const uint32_t t = find_target(&how)) {
                 c.call(r.lib_func("_ZN6Player10lockTargetEP11LevelObjectb"), {p, t, 1});
                 LOG("aim: auto-aim locked %08x (%s; now %08x)", t, how, m.r32(p + kPlayerTarget));
             }
             g_reacquire = 0.25;
         }
-    } else if (g_auto_aim_was && target) {
+    } else if (g_auto_aim_was && target && !g_lock_toggled) {
         c.call(r.lib_func("_ZN6Player12delockTargetEv"), {p});
         LOG("aim: auto-aim released");
     }
@@ -539,11 +704,15 @@ void frame(cpu::Cpu& c, double dt) {
     g_auto_aim_was = g_auto_aim;
 
     // Manual aim: keep the weapon out (the game then turns the player and points the gun at the
-    // screen centre every update); lower it again on release if nothing else raised it.
-    const bool in_vehicle = c.call(r.lib_func("_ZNK9Character12isInAVehicleEv"), {p + 4}) != 0;
+    // screen centre every update); lower it again on release if nothing else raised it. Aiming with
+    // the crosshair drops any lock, so the gun follows the crosshair.
     const bool aiming = g_manual_aim && !in_vehicle;
     if (aiming) {
-        if (!g_manual_was) LOG("aim: manual aim on");
+        if (!g_manual_was) {
+            LOG("aim: manual aim on");
+            if (m.r32(p + kPlayerTarget)) c.call(r.lib_func("_ZN6Player12delockTargetEv"), {p});
+            g_lock_toggled = false;
+        }
         if (m.r32(p + kPlayerWeaponOut) == 0) {
             c.call(r.lib_func("_ZN9Character10drawWeaponEv"), {p + 4});
             m.w32(p + kPlayerWeaponOut, 1);

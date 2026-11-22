@@ -95,6 +95,13 @@ HOOKABLE = {
 }
 
 
+# Literal-pool words read from guest memory at run time instead of being folded into constants,
+# so the port can change them (mods.cpp writes the new value into the pool word).
+RUNTIME_LITERALS = {
+    0x289dc0,  # GS3DStuff::update: the physics step, 1/60 s (smooth_physics sets it per frame)
+}
+
+
 def A(a):
     return f"0x{(LIB_BASE + a) & 0xFFFFFFFF:08x}u"
 
@@ -195,6 +202,8 @@ class Gen:
         if k == "blx_r":
             return [f"{{ uint32_t t_ = R({m}); LR = {ret}; rc_call(s, t_); }}"]
         if k == "ldr_lit":
+            if ins.lit in RUNTIME_LITERALS:
+                return [f"R({d}) = RD32({A(ins.lit)});  /* runtime literal (default 0x{self.e.u32(ins.lit):08x}) */"]
             return [f"R({d}) = 0x{self.e.u32(ins.lit):08x}u;"]
         mem = {"str_r": ("WR32", "R({n}) + R({m})"), "strb_r": ("WR8", "R({n}) + R({m})"),
                "strh_r": ("WR16", "R({n}) + R({m})"),

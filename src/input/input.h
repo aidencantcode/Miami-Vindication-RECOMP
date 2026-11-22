@@ -37,7 +37,7 @@ struct GameCalls {
 enum Action {
     A_ATTACK, A_ENTER_CAR, A_INTERACT, A_ACCELERATE, A_BRAKE, A_COVER, A_SPRINT,
     A_MAP, A_RADIO, A_RADIO_NEXT, A_WEAPON_NEXT, A_WEAPON_PREV, A_AIM, A_AUTO_AIM,
-    A_CONFIRM, A_BACK, A_MENU, A_COUNT
+    A_RELOAD, A_LOCK_TOGGLE, A_CONFIRM, A_BACK, A_MENU, A_COUNT
 };
 
 struct GameInput {
@@ -83,6 +83,8 @@ public:
 
 private:
     bool to_game(int wx, int wy, int* gx, int* gy) const;
+    void mouse_button(int button, bool down);  // mouse-look buttons (real or scripted)
+    void mouse_wheel(int notches);             // + = away from the user (up), - = down
     void set_vtouch(int id, bool down, int x, int y);
     GameInput gather(double dt);
     void drive_gameplay(const std::vector<mods::Control>& controls, const GameInput& gi, double dt);
@@ -121,8 +123,11 @@ private:
     bool prev_back_ = false, prev_menu_ = false;
     bool suppress_ = false;
     bool mouse_look_ = true, mouse_locked_ = false, lmb_attack_ = false;
-    bool rmb_held_ = false, mmb_held_ = false;  // mouse-look: right = aim (on foot) / fire (car), middle = auto-aim
+    bool rmb_held_ = false, mmb_held_ = false;  // mouse-look: right = aim (on foot) / fire (car), middle = lock toggle
+    bool mmb_click_ = false;                    // a middle click not yet handled (lock on / off)
     bool weapon_prev_ = false, weapon_next_ = false;  // last frame's weapon actions (press edges)
+    bool reload_was_ = false, lock_toggle_was_ = false;
+    bool skey_[SDL_NUM_SCANCODES] = {};         // scripted keyboard state (OR-ed with the real keys)
 
     struct Step { int frame; double time; std::string cmd; std::string a; int x, y; bool done; };
     std::vector<Step> script_;

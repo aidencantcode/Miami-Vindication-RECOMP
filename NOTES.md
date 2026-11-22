@@ -1007,6 +1007,49 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   give `Character::aim(bool)` a lower target. Walls are not raycast for the no-target case
   (`LevelObject::TestRay` signature still to confirm).
 
+### Q1 Controls: latency, smooth physics, fire auto-aim, VC layout (2026-11-22)
+- **Test isolation:** `GANGSTAR_HOME=<dir>` keeps sandbox (save), settings.ini and runtime.log under
+  `<dir>`. Scripted tests use `work/testhome` with the save reset from `work/testhome/snapshot` each run.
+- **Latency measured** (`GANGSTAR_INPUT_TRACE=1`: per-frame player/camera position, every virtual
+  touch, every `Weapon::shoot`): host side input → game is the same frame; walking starts 2-3 frames
+  (~25 ms) after the stick, camera turns on the next frame. Found instead: **the game steps physics
+  at a fixed 1/60 s** (`GS3DStuff::update`: accumulator += min(dt, cap)/1000; while acc >= 1/60:
+  every object's pre-physics vfunc +0x168, `b2World::Step(1/60, 10)`, post-physics +0x11c), with no
+  interpolation, so at 120 fps people, cars and the camera following them moved on every other frame
+  (measured 59/120). **Smooth physics** (`[game] smooth_physics`, default on): the step (literal pool
+  word at 0x289dc0) is read from memory in the recompiled code (`codegen.py RUNTIME_LITERALS`) and the
+  `Application::_Update` hook sets it to this frame's dt (slow frames > 16 ms keep 1/60), so there is
+  one step per frame. The page is made host-writable on first use (`GuestMemory::host_writable`; the
+  recompiled backend protects code pages). Verified: movement every frame (120/120); walking 578 vs
+  568 units/s; driving 2,641 vs 2,655 units/s top speed and the same braking (1,599 → 68 vs
+  1,578 → 70). Camera full-stick speed is only 72°/s (700 px/s drag): Q2 takes the camera over.
+- **Bullet spread** (`Weapon::shoot`): per axis `rand(-100..100) * 0.01 * weapon(+0x4C) *
+  shooter(Character +0x6C8, or +0x6CC when vfunc +0x110 is true)` is added to the unit direction
+  (pistol: 0.156 × 0.300 = ±0.047 per axis). Manual-aim shots scale both shooter factors by
+  `[controls] manual_aim_spread` (default 0.25) during the call; the post hook restores them.
+- **Fire auto-aim** (owner): `Player::updateLockTarget` locks `getAttackableTarget()` with
+  `lockTarget(t, false)` and delocks when it returns 0. Our getAttackableTarget post hook now lets the
+  game's pick through while fire is held and 1 s after (semi-auto taps don't swing back), never while
+  aiming with the crosshair or while a lock is held/toggled. Verified on foot and from a car (left
+  click and RB: target locked, 6 shots).
+- **Middle click** toggles a lock (`lockTarget(t, true)`, nearest attackable else the screen centre);
+  clicking again (or the target going away) unlocks. Right-click aim drops any lock.
+- **Reload:** `Character::reloadWeapon()` (what the script command ActorReload calls: plays anim 0x79
+  and refills through `Weapon::reload`), on R / LB on foot.
+- **Layout** modelled on GTA Vice City PC (original PC defaults: fire LMB/LCtrl, target RMB, wheel down
+  = next weapon, F/Enter = vehicle, in a car Space = handbrake, R / wheel = radio, C = crouch). The game
+  has no jump, horn or handbrake: Space sprints on foot and brakes in a car; C or Q = cover.
+- **Test helpers:** input script `kb <SDLKeyName> 0|1`, `mouse left|right|middle 0|1`,
+  `mouse wheel ±1`, `mod nearcar` (teleports beside `Character::getClosestVehicleFrom` and does what
+  the enter button does: Player+0x704 = car, `Player::initDriving(true)`; the car-you-may-enter field
+  is normally set by a physics contact). The teleport spot is in traffic: about half the runs die
+  ("YOU BEEN MURKED") with either physics mode.
+- **Helicopters** (Q1e, open): `FlyingControlHandler` takes the v-stick (EvStickMove →
+  `Helicopter::tipRotorBlades(angle, magnitude)`), up/down and left/right stick events (player
+  vfuncs +0xE0/+0xE4, +0xE8), buttons (jump table, types 0..11), and tilt like driving:
+  `handleAcceleration` writes the vehicle's +0x3E4 (from tilt y) and +0x3E8 (tilt x minus a neutral
+  value), and rolls the camera. Needs a reachable helicopter to map and test.
+
 ### 5C draw distance and LOD (findings 2026-11-21, nothing changed yet)
 - The `draw_distance` setting is applied once, in the `loadPerformanceProfile` hook, so it needs a
   restart (the F1 menu says so), and `apply_quality` is skipped entirely when `quality = phone`.

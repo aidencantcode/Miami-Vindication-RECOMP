@@ -39,6 +39,7 @@ struct Settings {
     std::string camera_mode = "classic";    // classic (phone: swings behind you) | freeform | first_person
     float stick_deadzone = 0.2f;
     bool tap_to_target = false;             // the phone's tap-on-a-person lock and automatic lock while shooting (touchscreens)
+    float manual_aim_spread = 0.25f;        // aiming with the crosshair: fraction of the game's random bullet spread
 
     // [audio]
     float master_volume = 1.0f;             // 0..1
@@ -53,6 +54,7 @@ struct Settings {
     bool hide_store_buttons = true;         // remove the dead Gameloft LIVE! / More Games! main-menu buttons
     bool custom_text = true;                // "Press any button to start", port credit in the credits
     int fast_forward_speed = 3;             // game speed while fast forward is on (F2 / R3): 2..8
+    bool smooth_physics = true;             // one physics step per frame (the game: fixed 60 Hz, so motion stepped at 60)
 };
 
 bool load(const std::filesystem::path& file, Settings* s);   // false if the file did not exist

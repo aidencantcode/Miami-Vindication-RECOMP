@@ -71,6 +71,7 @@ const std::vector<Field>& fields() {
         F("controls", "camera_mode", &Settings::camera_mode),
         F("controls", "stick_deadzone", &Settings::stick_deadzone),
         F("controls", "tap_to_target", &Settings::tap_to_target),
+        F("controls", "manual_aim_spread", &Settings::manual_aim_spread),
         F("audio", "master_volume", &Settings::master_volume),
         F("audio", "music_volume", &Settings::music_volume),
         F("audio", "sfx_volume", &Settings::sfx_volume),
@@ -81,6 +82,7 @@ const std::vector<Field>& fields() {
         F("game", "hide_store_buttons", &Settings::hide_store_buttons),
         F("game", "custom_text", &Settings::custom_text),
         F("game", "fast_forward_speed", &Settings::fast_forward_speed),
+        F("game", "smooth_physics", &Settings::smooth_physics),
     };
     return f;
 }

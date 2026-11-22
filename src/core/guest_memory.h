@@ -36,6 +36,9 @@ public:
     bool map(uint32_t addr, uint32_t size, uint32_t prot, const char* name);
     // Change guest-visible protection of part of a region (backends are notified).
     void protect(uint32_t addr, uint32_t size, uint32_t prot);
+    // Make the host pages under [addr, addr+size) read/write again (the recompiled backend makes
+    // read-only guest regions read-only on the host). For words the port patches in game code.
+    bool host_writable(uint32_t addr, uint32_t size);
 
     const std::vector<Region>& regions() const { return regions_; }
     const Region* region_of(uint32_t addr) const;
