@@ -292,13 +292,17 @@ void set_cap(GLenum cap, bool on) {
 }
 H(enable) { set_cap(a.u32(), true); }
 H(disable) { set_cap(a.u32(), false); }
+bool g_color_array_on = false;           // GL_COLOR_ARRAY enabled (glow colours)
+float g_cur_color[4] = {1, 1, 1, 1};     // glColor (glow colours when no colour array)
 H(enable_cs) {
     GLenum arr = a.u32();
+    if (arr == GL_COLOR_ARRAY) g_color_array_on = true;
     if (g_shader) ffp::client_state(arr, true, int(g_client_tex - GL_TEXTURE0));
     else glEnableClientState(arr);
 }
 H(disable_cs) {
     GLenum arr = a.u32();
+    if (arr == GL_COLOR_ARRAY) g_color_array_on = false;
     if (g_shader) ffp::client_state(arr, false, int(g_client_tex - GL_TEXTURE0));
     else glDisableClientState(arr);
 }
@@ -461,11 +465,13 @@ H(pop_matrix) {
 }
 H(color4f) {
     float r = a.f32(), g = a.f32(), b = a.f32(), al = a.f32();
+    g_cur_color[0] = r, g_cur_color[1] = g, g_cur_color[2] = b, g_cur_color[3] = al;
     if (g_shader) ffp::color(r, g, b, al);
     else glColor4f(r, g, b, al);
 }
 H(color4ub) {
     GLubyte r = GLubyte(a.u32()), g = GLubyte(a.u32()), b = GLubyte(a.u32()), al = GLubyte(a.u32());
+    g_cur_color[0] = r / 255.0f, g_cur_color[1] = g / 255.0f, g_cur_color[2] = b / 255.0f, g_cur_color[3] = al / 255.0f;
     if (g_shader) ffp::color(r / 255.0f, g / 255.0f, b / 255.0f, al / 255.0f);
     else glColor4ub(r, g, b, al);
 }
@@ -595,8 +601,15 @@ void post_before_draw(GLuint tex0) {
 // People and cars are drawn without fog (they were always close on the phone); with atmospheric
 // fog every opaque 3D draw is fogged, so a far car sits in the haze like the street around it.
 void fog_before_draw() {
-    const bool force = g_fog_cfg.atmospheric && g_fog_cfg.fog_everything && !g_fog_on && !g_blend && g_depth_test &&
-                       g_depth_range_far < 0.999f && is_world_projection(g_proj.back());
+    // Fog the draws the game leaves unfogged: people, cars and props, and the alpha-blended ones such
+    // as the sea (texture "water", drawn blended in both depth ranges, never fogged by the game, so
+    // it stayed clear while the city behind it faded). Not additive glows (fog would brighten them)
+    // and not the sky dome (its own projection, near plane 50, in the far depth range).
+    const Mat4& pr = g_proj.back();
+    const bool sky = g_depth_range_far >= 0.999f && proj_near(pr) < 1000.0f;
+    const bool additive = g_blend && g_blend_dst == GL_ONE;
+    const bool force = g_fog_cfg.atmospheric && g_fog_cfg.fog_everything && !g_fog_on && !additive && g_depth_test &&
+                       !sky && is_world_projection(pr);
     if (force == g_fog_forced) return;
     if (g_shader) ffp::set_fog_forced(force);
     else if (force) glEnable(GL_FOG);
@@ -648,7 +661,7 @@ H(tex_envfv) {
 // Frame trace of 2D draws: the client arrays (guest pointers) and texture sizes, to print each draw's
 // vertex / texture coordinate bounds (debugging HUD sprites, e.g. the clipped radio box).
 struct ArrayDbg { GLint size = 0; GLenum type = 0; GLsizei stride = 0; uint32_t ptr = 0; GLuint buf = 0; };
-ArrayDbg g_dbg_vtx, g_dbg_tc;
+ArrayDbg g_dbg_vtx, g_dbg_tc, g_dbg_col;
 std::unordered_map<GLuint, std::pair<int, int>> g_dbg_tex_size;
 float dbg_component(Cpu& c, const ArrayDbg& d, uint32_t i, int k) {
     const int sz = d.type == GL_FLOAT || d.type == GL_FIXED ? 4 : d.type == GL_SHORT ? 2 : 1;
@@ -723,6 +736,7 @@ void trace_geometry(Cpu& c, GLint first, GLsizei n, GLenum itype, uint32_t iptr,
 // Dynamic lights (post.h): each additive 3D draw on screen is glow sprites from the light-effects
 // atlas (lamps, neon, headlight / taillight / police flares); every quad becomes a light at its
 // centre (eye space, through its own modelview) with a radius from its size. Client arrays only.
+GLuint bound_tex0();
 void glow_capture(Cpu& c, GLenum mode, GLint first, GLsizei n, GLenum itype, uint32_t iptr) {
     if (!on_screen() || !g_blend || g_blend_dst != GL_ONE || !is_world_projection(g_proj.back()) || g_dbg_vtx.buf ||
         !g_dbg_vtx.ptr || n <= 0)
@@ -746,6 +760,26 @@ void glow_capture(Cpu& c, GLenum mode, GLint first, GLsizei n, GLenum itype, uin
         float* L = s.lights[s.light_count];
         for (int k = 0; k < 3; ++k) L[k] = mv.m[k] * o[0] + mv.m[4 + k] * o[1] + mv.m[8 + k] * o[2] + mv.m[12 + k];
         L[3] = std::clamp(size * 4.0f, 250.0f, 1400.0f);
+        if (frame_tracing() && q < 6 * 3) {
+            float uv[4] = {1e9f, 1e9f, -1e9f, -1e9f}, col[4] = {0, 0, 0, 0};
+            for (GLsizei j = 0; j < group; ++j) {
+                uint32_t i = uint32_t(first + q + j);
+                if (iptr) i = itype == GL_UNSIGNED_SHORT ? M.r16(iptr + 2 * (q + j)) : itype == GL_UNSIGNED_BYTE ? M.r8(iptr + q + j) : M.r32(iptr + 4 * (q + j));
+                if (g_dbg_tc.ptr && !g_dbg_tc.buf) {
+                    const float u = dbg_component(c, g_dbg_tc, i, 0), v = dbg_component(c, g_dbg_tc, i, 1);
+                    uv[0] = std::min(uv[0], u), uv[1] = std::min(uv[1], v), uv[2] = std::max(uv[2], u), uv[3] = std::max(uv[3], v);
+                }
+                for (int k = 0; k < 4; ++k)
+                    col[k] += (g_color_array_on && g_dbg_col.ptr && !g_dbg_col.buf
+                                   ? dbg_component(c, g_dbg_col, i, k) / (g_dbg_col.type == GL_UNSIGNED_BYTE ? 255.0f : 1.0f)
+                                   : g_cur_color[k]) / float(group);
+            }
+            LOG("frame-trace glow tex %u n %d %s: eye %.0f %.0f %.0f size %.0f uv %.3f..%.3f x %.3f..%.3f col %.2f %.2f %.2f %.2f "
+                "mv t %.0f %.0f %.0f x-axis %.2f %.2f %.2f view %s",
+                bound_tex0(), int(n), mode == GL_TRIANGLES ? "tris" : "other", L[0], L[1], L[2], size, uv[0], uv[2], uv[1], uv[3],
+                col[0], col[1], col[2], col[3], mv.m[12], mv.m[13], mv.m[14], mv.m[0], mv.m[1], mv.m[2],
+                s.view_valid ? (std::fabs(mv.m[12] - s.view[12]) + std::fabs(mv.m[13] - s.view[13]) + std::fabs(mv.m[14] - s.view[14]) < 1.0f ? "= camera" : "model") : "?");
+        }
         if (L[2] > 1.0f) ++s.light_count;  // in front of the camera
     }
 }
@@ -764,6 +798,7 @@ H(texcoord_pointer) {
 }
 H(color_pointer) {
     GLint s = a.s32(); GLenum t = a.u32(); GLsizei st = a.s32(); uint32_t p = a.u32();
+    g_dbg_col = {s, t, st, p, g_array_buffer};
     if (g_shader) ffp::color_pointer({s, t, st, array_ptr(c, p, g_array_buffer), g_array_buffer});
     else glColorPointer(s, t, st, array_ptr(c, p, g_array_buffer));
 }
