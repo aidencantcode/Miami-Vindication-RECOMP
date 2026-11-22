@@ -359,6 +359,8 @@ Suggested order: shared root causes first (5A.0), then audio, then input, then t
   `GLMediaPlayer` stream semantics (isMediaPlaying / restart logic polled every frame), stream
   buffering in the mixer, or game-side timing at high fps (5A.0). ✔ when music, radio and
   cutscene voices play through without repeats, at any frame rate.
+  **Fixed 2026-11-22** (NOTES, owner feedback round 2): the stream decoder dropped the frame the
+  resampler still needed, so 44.1 kHz streams "ended" ~46 ms in and the game restarted them.
 - **5A.4 Aiming and firing scheme (owner's design, 2026-11-20).** Fixes the random aim locks
   (on PC, clicks and mouse-look touches land on targets and count as the phone's "tap to target").
   - **Tap-to-target removed** for mouse, keyboard and controller play: nothing locks unless you ask.

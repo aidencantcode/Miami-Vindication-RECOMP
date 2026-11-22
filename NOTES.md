@@ -969,6 +969,18 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   the normal log: fire held 1.5 s on foot with a gun and no `Weapon::shoot` → one line `fire: held
   1.5 s without a shot: attack button <flags>, weapon type, clip, reload anim, aim state, target`.
   **Open:** needs the owner's runtime.log line from when it happens (and which weapon).
+- **Radio restarting ~15 times a second while driving (fps drops to ~48 at 100 Hz vsync) = 5A.3
+  "music, voices, radio break and loop": fixed.** The owner's log had 3,342 `stopRadio` /
+  `playRadio` pairs. `SoundManager::update` restarts the radio with a new random track
+  (`playRadio(station)`) whenever `isSoundPlaying(int)` → `nativeIsMediaPlaying` says the track
+  stopped. Our mixer's stream decoder kept only the last decoded frame when it slid its window, but
+  each output sample reads frames f and f + 1, and resampling 44.1 kHz files up to the 48 kHz device
+  (step 0.92) can stay on f for the next sample: loading f + 1 dropped f, which read as the end of
+  the file at the first 2,048-frame boundary (trace: "stream ended at frame 2046, window 2047+2049,
+  eof 0"). Every restart also re-read and re-opened a multi-MB .ogg on the main thread. Now the
+  window keeps two frames: in a 25 s drive the radio starts once (2 playRadio, was ~15/s) and
+  streams end only at EOF. `GANGSTAR_AUDIO_TRACE=1` also logs `isMediaPlaying` answers of "no"
+  and why a stream ended.
 
 ### 5A.1 Sprint forward/back (fixed 2026-11-22)
 - `AnalogStick::processTouch` (decomp_input.c): drag in screen pixels → 480×320 units as

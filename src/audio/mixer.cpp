@@ -57,9 +57,13 @@ struct Stream {
     // Make sure frames [f, f+1] are in the window if the file has them. Sequential access only.
     void need(uint64_t f) {
         while (!eof && f + 1 >= win_start + win_frames) {
-            // keep the last frame (for interpolation), drop the rest
-            if (win_frames > 1) {
-                const size_t keep = 1;
+            // Keep the last two frames, drop the rest. The mixer reads frames f and f + 1 for each
+            // output sample, and when resampling up (44.1 kHz files on a 48 kHz device) the next
+            // sample can still be at f: keeping only one frame dropped f when f + 1 was loaded, which
+            // read as the end of the file ~46 ms in (radio switching tracks ~15 times a second,
+            // music and voices cut and restarted: 5A.3).
+            if (win_frames > 2) {
+                const size_t keep = 2;
                 std::memmove(win.data(), win.data() + (win_frames - keep) * channels, keep * channels * sizeof(float));
                 win_start += win_frames - keep;
                 win_frames = keep;
@@ -139,6 +143,10 @@ void SDLCALL mix(void*, Uint8* bytes, int len) {
             uint64_t f = uint64_t(v.pos);
             float a[2], b[2];
             if (!frame(v, f, a)) {
+                if (v.stream && std::getenv("GANGSTAR_AUDIO_TRACE"))
+                    LOG("audio-trace stream %u ended at frame %llu (window %llu+%zu, eof %d, vorbis error %d, %d Hz %d ch)",
+                        v.id, (unsigned long long)f, (unsigned long long)v.stream->win_start, v.stream->win_frames,
+                        int(v.stream->eof), stb_vorbis_get_error(v.stream->vorbis), v.stream->rate, v.stream->channels);
                 if (!v.loop) { v.done = true; break; }
                 if (v.stream) v.stream->restart();
                 v.pos = 0;

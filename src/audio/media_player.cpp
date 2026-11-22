@@ -260,7 +260,9 @@ void reset_sound(int i) { trace("reset", i); if (auto it = g_big.find(i); it != 
 
 int is_media_playing(int i) {
     auto it = g_big.find(i);
-    return it != g_big.end() && audio::playing(it->second.voice) ? 1 : 0;
+    const int r = it != g_big.end() && audio::playing(it->second.voice) ? 1 : 0;
+    if (!r && it != g_big.end()) trace(!audio::alive(it->second.voice) ? "playing? no (ended)" : "playing? no (paused)", i);
+    return r;
 }
 
 void pause_all_sounds() {
