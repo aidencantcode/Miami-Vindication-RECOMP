@@ -328,6 +328,13 @@ Queue status (2026-11-22, end of the unattended run): Q0-Q9 and Q10.0-10.5 done 
 for the owner: Q1e helicopter controls (needs a reachable helicopter), first device run of the APK,
 then 10.6 from device measurements.
 
+**Owner feedback round 2 (2026-11-22, NOTES "Owner feedback round 2"):** ✅ wrong textures (night
+texture fingerprint collisions), ✅ radio restarting / music loops / fps drops while driving (5A.3:
+stream decoder), ✅ adaptive vsync, ✅ fog on the sea and sky haze, ✅ dynamic lights rebuilt
+(remembered lamps, headlight spot beams, coronas, settings), ✅ adaptive (night) bloom. Open: "manual
+aim won't fire" not reproduced; a diagnostic line is logged when fire is held 1.5 s without a shot:
+needs the owner's runtime.log from when it happens.
+
 ## ⏸ Phase 5: fixes from play-testing, then the Android port (planned 2026-11-20; owner says when to start)
 
 **Owner's play-test list (2026-11-20).** Each item gets its own commit and a pass/fail check.

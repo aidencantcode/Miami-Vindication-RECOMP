@@ -21,13 +21,22 @@ SOURCES = {
     "post": (ROOT / "src/gl/post.cpp", "#version 300 es\n", "#version 300 es\nprecision highp float;\n"),
 }
 
+# post.cpp: strings that are only prepended to others, and which others get them
+INCLUDES_ONLY = {"kLightCommon"}
+WITH_COMMON = {v: "kLightCommon" for v in ("kLightVS", "kLightFS", "kCoronaVS", "kCoronaFS")}
+
 failed = 0
 with tempfile.TemporaryDirectory() as tmp:
     for name, (path, es_vs, es_fs) in SOURCES.items():
         text = path.read_text(encoding="utf-8")
-        for m in re.finditer(r'const char\* (k\w+) = R"\((.*?)\)";', text, re.S):
-            var, body = m.group(1), m.group(2)
-            stage = "vert" if var == "kVS" else "frag"
+        strings = {m.group(1): m.group(2) for m in re.finditer(r'const char\* (k\w+) = R"\((.*?)\)";', text, re.S)}
+        for var, body in strings.items():
+            if var in INCLUDES_ONLY:
+                continue
+            stage = "vert" if var == "kVS" or var.endswith("VS") else "frag"
+            # the dynamic light / corona shaders are compiled with a shared block in front (post.cpp init)
+            if var in WITH_COMMON:
+                body = strings[WITH_COMMON[var]] + body
             for profile, pre in (("es300", es_vs if stage == "vert" else es_fs), ("gl330", "#version 330\n")):
                 f = pathlib.Path(tmp) / f"{name}_{var}_{profile}.{stage}"
                 f.write_text(pre + body, encoding="utf-8")
