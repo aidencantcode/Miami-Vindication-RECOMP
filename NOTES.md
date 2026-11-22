@@ -1058,6 +1058,26 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   the horizontal), A/D = turn (+0x3E4 via a FlyingControlHandler::handleAcceleration hook like the
   driving one, with neutral accelerometer events), controller RT/LT = up/down.
 
+### Q3 Aim leftovers (2026-11-22)
+- **Walls:** `LevelObject::TestRay(this = shooter (skipped), const vec3& from, const vec3& delta,
+  bool, bool, bool, vec3* hit, vec3* normal, b2Shape** shape, void*)`, called like
+  `Weapon::getTargetPointedByWeapon` (false, true, false, ..., null). It **returns true when the ray
+  is clear**; on a hit, `hit` is the point, `normal` the surface normal and `shape` the Box2D shape
+  (0 for terrain: it also hits the ground). Manual-aim shots with no target under the crosshair aim
+  at the first hit along the crosshair ray (verified: hotel wall 3,347 units along).
+- **Free look feedback loop** found while testing: during manual aim the head moves a little, which
+  counted as "moving", so the camera eased toward "behind the player" while the player turned toward
+  the view: the view kept turning between shots. Now no swing back while aiming / locked, and
+  "moving" uses the look-at speed smoothed over 0.25 s with a 150 units/s threshold.
+- **Arm pose:** `Character::shoot` uses the 2-argument `Weapon::shoot`, which takes the shot direction
+  from the gun bone, so the logged "game dir" is where the gun really points. With nothing locked,
+  `Character::aim(bool)` aims from the feet toward the far end (~18,000 units) of the ray through the
+  screen centre (`CSceneCollisionManager::getRayFromScreenCoordinates`, line3d via hidden pointer).
+  Measured: gun ≈ 12.5° + 2 × (ray angle − drop). Hooks on Character::aim (player, manual aim) and
+  the ray function (both added to HOOKABLE) turn the ray down by ray / 2 + 6.25°. Verified: gun vs
+  crosshair 0.08 / 0.05, −0.18 / −0.21, 0.29 / 0.28 (sin of pitch) looking ahead, down and up.
+- **Drive-by with RB:** verified in the Q1 car test (target locked, shots fired).
+
 ### Q2 Free look (2026-11-22)
 - Camera stack: `CameraManager::update(int ms)` calls the active camera's `update(float s)` (vfunc
   +8; FollowCamera on foot, VehicleCamera in cars, both `Camera` with position +0x08 and look-at

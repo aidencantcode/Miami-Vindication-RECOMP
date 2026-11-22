@@ -610,7 +610,8 @@ bool Input::parse_script(const std::string& script, std::string* err) {
         std::stringstream is(item.substr(colon + 1));
         is >> s.cmd;
         if (s.cmd == "pad" || s.cmd == "stick" || s.cmd == "mod" || s.cmd == "kb" || s.cmd == "mouse") is >> s.a;
-        if (s.cmd == "key" || s.cmd == "pad" || s.cmd == "kb" || s.cmd == "mouse") is >> s.x;
+        if (s.cmd == "mouse" && s.a == "move") is >> s.x >> s.y;  // window pixels
+        else if (s.cmd == "key" || s.cmd == "pad" || s.cmd == "kb" || s.cmd == "mouse") is >> s.x;
         else if (s.cmd != "mod") is >> s.x >> s.y;
         const bool known = s.cmd == "tap" || s.cmd == "down" || s.cmd == "move" || s.cmd == "up" ||
                            s.cmd == "key" || s.cmd == "pad" || s.cmd == "stick" || s.cmd == "mod" ||
@@ -636,8 +637,8 @@ bool Input::parse_script(const std::string& script, std::string* err) {
                 return false;
             }
         }
-        if (s.cmd == "mouse" && s.a != "left" && s.a != "right" && s.a != "middle" && s.a != "wheel") {
-            *err = "mouse must be left, right, middle or wheel in '" + item + "'";
+        if (s.cmd == "mouse" && s.a != "left" && s.a != "right" && s.a != "middle" && s.a != "wheel" && s.a != "move") {
+            *err = "mouse must be left, right, middle, wheel or move in '" + item + "'";
             return false;
         }
         script_.push_back(s);
@@ -680,7 +681,10 @@ void Input::run_script(int frame, double seconds) {
         } else if (s.cmd == "mouse") {  // mouse-look buttons, as if the cursor were locked
             last_device_ = Device::Keyboard;
             if (s.a == "wheel") mouse_wheel(s.x);
-            else mouse_button(s.a == "left" ? SDL_BUTTON_LEFT : s.a == "right" ? SDL_BUTTON_RIGHT : SDL_BUTTON_MIDDLE, s.x != 0);
+            else if (s.a == "move") {  // as mouse-look motion (window pixels -> game pixels)
+                rmb_dx_ += float(s.x) * game_w_ / std::max(vp_w_, 1);
+                rmb_dy_ += float(s.y) * game_h_ / std::max(vp_h_, 1);
+            } else mouse_button(s.a == "left" ? SDL_BUTTON_LEFT : s.a == "right" ? SDL_BUTTON_RIGHT : SDL_BUTTON_MIDDLE, s.x != 0);
         }
         break;
     }

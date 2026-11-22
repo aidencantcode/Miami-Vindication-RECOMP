@@ -93,6 +93,8 @@ HOOKABLE = {
     "_ZN9HudScreen19processTouchReleaseEv",  # aiming: no tap-to-target (5A.4)
     "_ZN9Character19getAttackableTargetEv",  # aiming: no automatic lock (5A.4)
     "_ZN6Weapon5shootEP9CharacterN6glitch4core8vector3dIfEES5_b",  # manual aim: shots to the crosshair
+    "_ZN9Character3aimEb",  # manual aim: arm pose along the crosshair (Q3)
+    "_ZN6glitch5scene22CSceneCollisionManager27getRayFromScreenCoordinatesENS_4core10position2dIiEEPNS0_16ICameraSceneNodeE",
 }
 
 

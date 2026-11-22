@@ -1,4 +1,4 @@
-#include "game/mods.h"
+﻿#include "game/mods.h"
 
 #include <algorithm>
 #include <cmath>
@@ -36,6 +36,7 @@ struct FreeLook {
     float yaw = 0, pitch = 0;           // direction from the look-at point to the camera (radians, Z up)
     float look[3] = {};
     double idle = 0;                    // seconds without camera input
+    float speed = 0;                    // look-at point speed, smoothed (units/s)
     bool valid = false;
 };
 FreeLook g_fl;
@@ -71,7 +72,7 @@ float f32_at(uint32_t a) {
     return f;
 }
 
-// ---- aiming (Phase 5A.4, NOTES §5A.4) ----------------------------------------------------------
+// ---- aiming (Phase 5A.4, NOTES Â§5A.4) ----------------------------------------------------------
 // The phone aims two ways: a short tap on empty screen locks onto whatever is under it
 // (HudScreen::processTouchRelease -> tappedTarget -> Player::lockTarget(t, true)), and while the
 // weapon is out Player::updateLockTarget locks automatically onto Character::getAttackableTarget()
@@ -106,6 +107,13 @@ bool g_manual_aim = false, g_manual_was = false;
 float g_aim_blend = 0;                   // 0 = game camera, 1 = over the shoulder
 float g_aim_eye[3] = {}, g_aim_dir[3] = {};  // the aim camera (eye, unit view direction) last placed
 bool g_aim_valid = false;
+bool g_lower_aim_ray = false;              // inside the player's Character::aim during manual aim
+uint32_t g_ray_out = 0;                    // getRayFromScreenCoordinates result to adjust (pre -> post)
+// The aim blend turns the gun about twice the ray's vertical angle, 12.5° high: gun ≈ 12.5° +
+// 2 × (ray − drop) (fit to four measurements of the gun bone's direction: +17.5° / +6.3° / +2.3° at
+// crosshair +3° with drops 0.5° / 6.4° / 8.3°, and −27.4° at crosshair −10.4° with 8.3°). So the
+// ray is turned down by drop = ray / 2 + 6.25°, which puts the gun on the crosshair.
+constexpr float kAimDropBase = 0.109f;     // 6.25° in radians
 constexpr uint32_t kPlayerWeaponOut = 0x688;  // Player: weapon drawn / aiming (time, 0 = lowered)
 // GANGSTAR_INPUT_TRACE=1: per-frame log of the player and camera positions (input latency checks).
 const bool g_input_trace = std::getenv("GANGSTAR_INPUT_TRACE") != nullptr;
@@ -164,6 +172,7 @@ void free_look_update(cpu::Cpu& c, uint32_t cam) {
         g_fl.pitch = game_pitch;
         g_fl.cam = cam;
         g_fl.idle = 0;
+        g_fl.speed = 0;
         g_fl.valid = true;
         jump = 0;
     }
@@ -177,8 +186,14 @@ void free_look_update(cpu::Cpu& c, uint32_t cam) {
         g_fl.idle += dt;
     }
     g_cam_in_x = g_cam_in_y = 0;
-    const float speed = jump / dt;  // how fast the look-at point (player / car) moves
-    if (g_camera_mode != "first_person" && g_fl.idle > g_fl_return_delay && speed > 60.0f) {
+    // How fast the look-at point (player / car) moves, smoothed over ~0.25 s: head bob and the aim
+    // animation must not count as moving (walking is ~570 units/s).
+    g_fl.speed += (jump / dt - g_fl.speed) * std::min(1.0f, dt / 0.25f);
+    // No swing back while aiming or locked on: the player turns to face the view, so "behind the
+    // player" would chase the view in a loop.
+    const uint32_t pl = player_obj(c.rt());
+    const bool aiming = g_aim_blend > 0 || (pl && m.r32(pl + kPlayerTarget) != 0);
+    if (g_camera_mode != "first_person" && !aiming && g_fl.idle > g_fl_return_delay && g_fl.speed > 150.0f) {
         const float step = g_fl_return_speed * 0.017453f * dt;
         float d = game_yaw - g_fl.yaw;
         d = std::remainder(d, 6.2831853f);
@@ -501,12 +516,31 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
             for (int i = 0; i < 3; ++i) aim[i] = f32_at(scratch + 4 * i);
             aim[2] += person ? 110.0f : 60.0f;  // chest / body
         } else {
-            // Nothing under the crosshair: where its ray meets the ground at the player's feet
-            // (no world raycast yet), else 60 m along it.
+            // Nothing under the crosshair: where its ray first meets the world (a wall: the game's own
+            // LevelObject::TestRay, as Weapon::getTargetPointedByWeapon calls it), else where it meets
+            // the ground at the player's feet, else 60 m along it.
             float reach = 6000.0f;
             c.call(m.r32(m.r32(p + 4) + 0x5c), {scratch, p + 4});
             const float ground = f32_at(scratch + 8);
             if (g_aim_dir[2] < -0.01f) reach = std::min(reach, (g_aim_eye[2] - ground) / -g_aim_dir[2]);
+            static uint32_t ray = 0;
+            if (!ray) ray = r.heap().alloc(80);
+            float buf[20] = {};
+            for (int i = 0; i < 3; ++i) buf[i] = g_aim_eye[i], buf[4 + i] = g_aim_dir[i] * reach;
+            m.write(ray, buf, sizeof buf);  // +0 from, +16 delta, +32 / +48 outputs, +64 shape
+            // Returns true when the ray is clear; on a hit, +32 = hit point, +48 = surface normal,
+            // +64 = the b2Shape (0 for terrain). Checked by logging (wall 3,347 along, ground 663).
+            const bool hit = (c.call(r.lib_func("_ZN11LevelObject7TestRayERKN6glitch4core8vector3dIfEES5_bbbPS3_S6_PP7b2ShapeS6_"),
+                                     {p + 4, ray, ray + 16, 0}, {1, 0, ray + 32, ray + 48, ray + 64, 0}) & 0xff) == 0;
+            float a[3], b[3];
+            for (int i = 0; i < 3; ++i) a[i] = f32_at(ray + 32 + 4 * i), b[i] = f32_at(ray + 48 + 4 * i);
+            const float ta = (a[0] - g_aim_eye[0]) * g_aim_dir[0] + (a[1] - g_aim_eye[1]) * g_aim_dir[1] +
+                             (a[2] - g_aim_eye[2]) * g_aim_dir[2];
+            static int logged_ray = 0;
+            if (logged_ray++ < 6)
+                LOG("aim: ray %s: A %.0f %.0f %.0f (%.0f along) B %.2f %.2f %.2f shape %08x (reach %.0f)", hit ? "hit" : "miss",
+                    a[0], a[1], a[2], ta, b[0], b[1], b[2], m.r32(ray + 64), reach);
+            if (hit && ta > 50.0f && ta < reach) reach = ta;
             for (int i = 0; i < 3; ++i) aim[i] = g_aim_eye[i] + g_aim_dir[i] * reach;
         }
         float nd[3], l = 0;
@@ -530,6 +564,39 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
         for (int i = 0; i < 2; ++i) c.rt().mem().w32(g_spread_char + 0x6c8 + 4 * i, g_spread_saved[i]);
         g_spread_char = 0;
     }});
+
+    // Manual aim arm pose: with nothing locked, Character::aim(bool) takes the ray from the scene
+    // camera through the screen centre (CSceneCollisionManager::getRayFromScreenCoordinates) and
+    // points the 9-way aim blend from the character's FEET to the ray's far end, so from the gun the
+    // arm looked ~8 degrees above the crosshair. While the player aims by hand, the far end is lowered
+    // by the gun's height above the feet, which makes the arm parallel to the crosshair ray.
+    rt.hook_function("_ZN9Character3aimEb", {
+        [](cpu::Cpu& c) {
+            const uint32_t p = player_obj(c.rt());
+            g_lower_aim_ray = p && c.reg(cpu::R0) == p + 4 && g_aim_blend > 0.5f;
+            return false;
+        },
+        [](cpu::Cpu&) { g_lower_aim_ray = false; }});
+    rt.hook_function(
+        "_ZN6glitch5scene22CSceneCollisionManager27getRayFromScreenCoordinatesENS_4core10position2dIiEEPNS0_16ICameraSceneNodeE",
+        {[](cpu::Cpu& c) {
+             g_ray_out = g_lower_aim_ray ? c.reg(cpu::R0) : 0;  // line3d result (hidden pointer)
+             return false;
+         },
+         [](cpu::Cpu& c) {
+             if (!g_ray_out) return;
+             const uint32_t end_z = g_ray_out + 20;  // line3d: start xyz, end xyz
+             const float dx = f32_at(g_ray_out + 12) - f32_at(g_ray_out), dy = f32_at(g_ray_out + 16) - f32_at(g_ray_out + 4);
+             const float dxy = std::sqrt(dx * dx + dy * dy);
+             if (dxy < 1.0f) return;
+             const float ray = std::atan2(f32_at(end_z) - f32_at(g_ray_out + 8), dxy);
+             const float drop = 0.5f * ray + kAimDropBase;
+             const float z = f32_at(g_ray_out + 8) + dxy * std::tan(std::clamp(ray - drop, -1.3f, 1.3f));
+             uint32_t bits;
+             std::memcpy(&bits, &z, 4);
+             c.rt().mem().w32(end_z, bits);
+             g_ray_out = 0;
+         }});
 
     // ---- virtual steering (tilt mode) -------------------------------------------------------------
     rt.hook_function("_ZN21DrivingControlHandler18handleAccelerationEPK14EvAcceleration", {[](cpu::Cpu& c) {
