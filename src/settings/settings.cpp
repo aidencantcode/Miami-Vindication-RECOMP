@@ -69,6 +69,8 @@ const std::vector<Field>& fields() {
         F("controls", "invert_camera_y", &Settings::invert_camera_y),
         F("controls", "mouse_look", &Settings::mouse_look),
         F("controls", "camera_mode", &Settings::camera_mode),
+        F("controls", "freelook_return_delay", &Settings::freelook_return_delay),
+        F("controls", "freelook_return_speed", &Settings::freelook_return_speed),
         F("controls", "stick_deadzone", &Settings::stick_deadzone),
         F("controls", "tap_to_target", &Settings::tap_to_target),
         F("controls", "manual_aim_spread", &Settings::manual_aim_spread),

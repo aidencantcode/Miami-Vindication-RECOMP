@@ -287,8 +287,10 @@ Rules while unattended:
 - Small verified steps, one commit each, NOTES/PLAN kept current, unknowns written down.
 
 Queue:
-- Q0 Test isolation: `GANGSTAR_HOME`, test script uses a copy of the owner's save.
-- Q1 Controls (owner's list):
+- ✅ Q0 Test isolation: `GANGSTAR_HOME`, test script uses a copy of the owner's save.
+- Q1 Controls (owner's list): ✅ a-d (f7536d9: smooth physics, fire auto-aim, middle-click lock,
+  reload, Space brake, VC layout); e helicopters: RE done, blocked on testing (no helicopter
+  reachable from the save; NOTES Q1). Revisit when the owner reaches one.
   - a. Input delay: controls feel unresponsive. Measure input-to-game latency, remove what adds frames.
   - b. Manual aim recoil/spread much smaller than the game's (random) auto-aim spread.
   - c. Mouse: left button alone fires **with the game's own auto-aim** (as on the phone when you shoot or
@@ -296,7 +298,7 @@ Queue:
     auto-aim on hold. Wheel scroll stays weapon switching. Controller: RB fire auto-aims the same way.
   - d. In cars: **Space = brake** (no longer fires; left mouse fires). **R = reload.**
   - e. Keyboard/mouse layout modelled on GTA Vice City PC, including helicopter controls.
-- Q2 Free look, GTA VC PC style (5A.6): direct mouse, camera stays put, slow return after a pause, on
+- ✅ Q2 Free look, GTA VC PC style (5A.6): direct mouse, camera stays put, slow return after a pause, on
   foot and in cars; settings for the pause and the return speed.
 - Q3 Aim leftovers: arm pose above the crosshair, aim point near walls (world ray), RB drive-by test.
 - Q4 Radio box (5A.2): owner says it looks fixed; confirm at 800, 854 and 16:9 widths, close it.

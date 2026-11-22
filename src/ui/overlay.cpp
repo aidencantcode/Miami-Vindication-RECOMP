@@ -254,10 +254,19 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
                             {{"auto", "Auto (hide while a controller or keyboard plays)"}, {"show", "Always show"},
                              {"hide", "Always hide"}});
             ch |= ImGui::SliderFloat("Camera speed", &s.mouse_sensitivity, 0.1f, 5.0f, "%.2f");
+            if (s.camera_mode == "freeform") s.camera_mode = "freelook";
             ch |= combo_str("Camera", &s.camera_mode,
-                            {{"classic", "Classic (swings back behind you, like the phone)"},
-                             {"freeform", "Freeform (stays where you point it)"},
+                            {{"freelook", "Free look (GTA Vice City PC: stays where you point it)"},
+                             {"classic", "Classic (swings back behind you, like the phone)"},
                              {"first_person", "First person (on foot)"}});
+            if (s.camera_mode == "freelook") {
+                ch |= ImGui::SliderFloat("Turn back after (seconds)", &s.freelook_return_delay, 0.0f, 10.0f, "%.1f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How long the camera stays where you left it before it starts\n"
+                                      "turning back behind you (only while you move or drive).");
+                ch |= ImGui::SliderFloat("Turn back speed (degrees/s)", &s.freelook_return_speed, 0.0f, 360.0f, "%.0f");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = never turns back by itself.");
+            }
             ch |= ImGui::Checkbox("Mouse look (lock the cursor while playing)", &s.mouse_look);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("The mouse turns the camera and left click attacks. The cursor is released\n"

@@ -54,8 +54,15 @@ int steering_mode(rt::Runtime& rt);
 // (input feeds a neutral reading every frame) because they are what runs the handler.
 void set_virtual_steering(bool on, float steer);
 
-// Camera mode (classic | freeform | first_person), live.
+// Camera mode (classic | freelook | first_person; "freeform" = freelook), live.
 void set_camera_mode(const std::string& mode);
+// Free look is steering the current camera (on foot or in a car): camera input goes to
+// camera_input() instead of drags on the screen.
+bool free_look_on();
+// Camera turn in game pixels (mouse motion, or stick speed x dt): + x = right, + y = down.
+void camera_input(float dx, float dy);
+// Free look: seconds without camera input before it turns back behind you, and how fast (deg/s).
+void set_free_look_return(float delay_s, float speed_deg);
 // One physics step per frame instead of the game's fixed 60 Hz ([game] smooth_physics), live.
 void set_smooth_physics(bool on);
 // Scripted test helpers (input script "mod <name>"), run at the next frame(): nearcar.

@@ -36,7 +36,9 @@ struct Settings {
     float mouse_sensitivity = 1.0f;
     bool invert_camera_y = false;
     bool mouse_look = true;                 // lock the cursor in gameplay; the mouse turns the camera, left click attacks
-    std::string camera_mode = "classic";    // classic (phone: swings behind you) | freeform | first_person
+    std::string camera_mode = "freelook";   // classic (phone: swings behind you) | freelook (GTA VC PC) | first_person
+    float freelook_return_delay = 1.5f;     // free look: seconds without camera input before it turns back behind you
+    float freelook_return_speed = 90.0f;    // free look: how fast it turns back (degrees per second; 0 = never)
     float stick_deadzone = 0.2f;
     bool tap_to_target = false;             // the phone's tap-on-a-person lock and automatic lock while shooting (touchscreens)
     float manual_aim_spread = 0.25f;        // aiming with the crosshair: fraction of the game's random bullet spread

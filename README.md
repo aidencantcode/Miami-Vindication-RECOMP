@@ -205,7 +205,12 @@ Two bugs it found, each within minutes:
 - **Restored day/night look:** the game ships night versions of the whole city (lit windows,
   blue night) but its code to use them was dead, so phones showed a daylight city all night.
   The port swaps them in at night and tints the city through sunrise and sunset to match the sky.
-- **Camera modes:** classic (re-centres behind you, like the phone), freeform and first person.
+- **Camera modes:** free look (default, GTA Vice City PC style: the mouse or right stick turns the
+  camera directly, it stays where you leave it and swings back behind you after a pause while you
+  move or drive; delay and speed in F1), classic (re-centres behind you, like the phone) and first
+  person.
+- **Smooth physics:** the game moves people and cars in fixed 60 Hz steps; the port steps once per
+  frame, so motion is smooth at 120 fps and above.
 - **Fast forward** (F2 or R3).
 - Gameloft LIVE! / More Games store buttons removed. "Press any button to start" replaces the touch
   prompt.

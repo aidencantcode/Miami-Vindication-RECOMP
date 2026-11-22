@@ -27,9 +27,23 @@ int64_t g_step_ms = 0, g_steps = 0;  // game time steps since the last take_step
 uint32_t g_cam_watch = 0;
 bool g_cam_watch_done = false;
 std::string g_camera_mode = "classic";  // classic | freeform | first_person
-uint32_t g_cam_self = 0;                // FollowCamera being updated (pre -> post)
+uint32_t g_cam_self = 0;                // Follow/VehicleCamera being updated (pre -> post)
+float g_cam_dt = 0;                     // its update's time step (seconds)
 uint32_t g_cm_self = 0;                 // CameraManager being updated (pre -> post), first person only
-float g_cam_look[3] = {}, g_cam_off[3] = {};
+// Free look (Q2): our own yaw/pitch of the camera around the game's look-at point.
+struct FreeLook {
+    uint32_t cam = 0;
+    float yaw = 0, pitch = 0;           // direction from the look-at point to the camera (radians, Z up)
+    float look[3] = {};
+    double idle = 0;                    // seconds without camera input
+    bool valid = false;
+};
+FreeLook g_fl;
+float g_cam_in_x = 0, g_cam_in_y = 0;   // camera input not applied yet (game pixels)
+int g_frame_no = 0, g_fl_frame = -100;  // mods::frame count; the frame free look last ran
+float g_fl_return_delay = 1.5f, g_fl_return_speed = 90.0f;  // seconds; degrees per second
+constexpr float kFreeLookRadPerPixel = 0.0045f;  // ~0.26 degrees per game pixel of mouse / stick
+bool free_look_mode() { return g_camera_mode == "freelook" || g_camera_mode == "first_person"; }
 
 // CHudManager fields holding touch controls (from CHudManager::load), with their classes.
 struct ControlField { int offset; const char* kind; };
@@ -97,6 +111,7 @@ constexpr uint32_t kPlayerWeaponOut = 0x688;  // Player: weapon drawn / aiming (
 const bool g_input_trace = std::getenv("GANGSTAR_INPUT_TRACE") != nullptr;
 int g_trace_frame = 0;
 uint32_t g_follow_cam = 0;  // the on-foot FollowCamera (last FollowCamera::update)
+uint32_t g_trace_cam = 0;   // the Follow/VehicleCamera updated last (input trace)
 // Physics step (see the Application::_Update hook): the literal-pool word in GS3DStuff::update.
 bool g_smooth_physics = true;
 std::vector<std::string> g_debug_cmds;  // scripted test commands (input "mod <name>"), run in frame()
@@ -125,6 +140,57 @@ void apply_quality(const settings::Settings& s, cpu::Cpu& c) {
         scale_int(0x24, 1.5f);
     }
     m.w8(p + 0x04, s.mipmaps ? 1 : 0);
+}
+
+void free_look_update(cpu::Cpu& c, uint32_t cam) {
+    auto& m = c.rt().mem();
+    float look[3], off[3], dist = 0;
+    for (int i = 0; i < 3; ++i) {
+        look[i] = f32_at(cam + 0x14 + 4 * i);
+        off[i] = f32_at(cam + 0x08 + 4 * i) - look[i];
+        dist += off[i] * off[i];
+    }
+    dist = std::sqrt(dist);
+    if (!(dist > 1.0f) || !std::isfinite(dist)) return;
+    const float game_yaw = std::atan2(off[1], off[0]);
+    const float game_pitch = std::asin(std::clamp(off[2] / dist, -1.0f, 1.0f));
+    float jump = 0;
+    for (int i = 0; i < 3; ++i) jump += (look[i] - g_fl.look[i]) * (look[i] - g_fl.look[i]);
+    jump = std::sqrt(jump);
+    const float dt = std::clamp(g_cam_dt, 0.0005f, 0.1f);
+    // A new camera (got in / out of a car), a cut or a teleport: start from the game's view.
+    if (!g_fl.valid || g_fl.cam != cam || jump > 2.0f * dist || g_frame_no - g_fl_frame > 2) {
+        g_fl.yaw = game_yaw;
+        g_fl.pitch = game_pitch;
+        g_fl.cam = cam;
+        g_fl.idle = 0;
+        g_fl.valid = true;
+        jump = 0;
+    }
+    g_fl_frame = g_frame_no;
+    std::memcpy(g_fl.look, look, sizeof look);
+    if (g_cam_in_x != 0 || g_cam_in_y != 0) {  // right = turn right, down = look down
+        g_fl.yaw -= g_cam_in_x * kFreeLookRadPerPixel;
+        g_fl.pitch += g_cam_in_y * kFreeLookRadPerPixel;
+        g_fl.idle = 0;
+    } else {
+        g_fl.idle += dt;
+    }
+    g_cam_in_x = g_cam_in_y = 0;
+    const float speed = jump / dt;  // how fast the look-at point (player / car) moves
+    if (g_camera_mode != "first_person" && g_fl.idle > g_fl_return_delay && speed > 60.0f) {
+        const float step = g_fl_return_speed * 0.017453f * dt;
+        float d = game_yaw - g_fl.yaw;
+        d = std::remainder(d, 6.2831853f);
+        g_fl.yaw += std::clamp(d, -step, step);
+        g_fl.pitch += std::clamp(game_pitch - g_fl.pitch, -step * 0.5f, step * 0.5f);
+    }
+    g_fl.yaw = std::remainder(g_fl.yaw, 6.2831853f);
+    g_fl.pitch = std::clamp(g_fl.pitch, -0.35f, 1.2f);  // from a little below the head to steeply down
+    const float cp = std::cos(g_fl.pitch);
+    const float pos[3] = {look[0] + dist * cp * std::cos(g_fl.yaw), look[1] + dist * cp * std::sin(g_fl.yaw),
+                          look[2] + dist * std::sin(g_fl.pitch)};
+    m.write(cam + 0x08, pos, 12);
 }
 
 void log_profile(cpu::Cpu& c, const char* when) {
@@ -228,46 +294,37 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
     }, nullptr});
 
     // ---- camera modes ---------------------------------------------------------------------------
-    // FollowCamera (on-foot camera): position at +0x08, look-at at +0x14 (Camera::getPosition /
-    // getLookAt). FollowCamera::update moves the camera back behind the character every frame
-    // (the phone's auto-centering); drags arrive as per-frame yaw/pitch deltas (+0x34/+0x38, from
+    // FollowCamera (on foot) and VehicleCamera (cars) are Camera subclasses: position at +0x08,
+    // look-at at +0x14 (Camera::getPosition / getLookAt), update(float seconds) via CameraManager::
+    // update. FollowCamera::update moves the camera back behind the character every frame (the
+    // phone's auto-centering); drags arrive as per-frame yaw/pitch deltas (+0x34/+0x38, from
     // updateAngles) that updatePosition applies as rotations around the target and then zeroes.
-    // Freeform: keep the camera's offset from its look-at point across the game's update, so it
-    // follows the character without swinging behind it; drags still rotate it.
-    g_camera_mode = s.camera_mode;
-    rt.hook_function("_ZN12FollowCamera6updateEf", {
-        [](cpu::Cpu& c) {
-            g_follow_cam = c.reg(cpu::R0);
-            if (g_camera_mode != "freeform") return false;
-            auto& m = c.rt().mem();
-            const uint32_t cam = c.reg(cpu::R0);
-            g_cam_self = cam;
-            for (int i = 0; i < 3; ++i) {
-                g_cam_look[i] = f32_at(cam + 0x14 + 4 * i);
-                g_cam_off[i] = f32_at(cam + 0x08 + 4 * i) - g_cam_look[i];
-            }
-            (void)m;
-            return false;
-        },
-        [](cpu::Cpu& c) {
-            if (g_camera_mode != "freeform" || !g_cam_self) return;
-            auto& m = c.rt().mem();
-            const uint32_t cam = g_cam_self;
-            g_cam_self = 0;
-            float look[3], jump2 = 0, off2 = 0;
-            for (int i = 0; i < 3; ++i) {
-                look[i] = f32_at(cam + 0x14 + 4 * i);
-                jump2 += (look[i] - g_cam_look[i]) * (look[i] - g_cam_look[i]);
-                off2 += g_cam_off[i] * g_cam_off[i];
-            }
-            if (off2 <= 0 || jump2 > 4 * off2) return;  // cut, teleport or a new target: let the game place it
-            for (int i = 0; i < 3; ++i) {
-                const float v = look[i] + g_cam_off[i];
-                uint32_t bits;
-                std::memcpy(&bits, &v, 4);
-                m.w32(cam + 0x08 + 4 * i, bits);
-            }
-        }});
+    // Free look (Q2, GTA Vice City PC style; "freeform" in old settings files means the same): after
+    // the game's update, the camera is put at our own yaw/pitch around the game's look-at point, at
+    // the game's distance. Mouse / right stick turn it directly (camera_input, no drags), it stays
+    // where it was left, and after freelook_return_delay seconds without camera input, while moving,
+    // it turns back toward where the game would put it (behind) at freelook_return_speed. Writing
+    // the game camera (not only the scene node) keeps "forward" for the stick, aiming and first
+    // person consistent with the view.
+    g_camera_mode = s.camera_mode == "freeform" ? "freelook" : s.camera_mode;
+    g_fl_return_delay = std::max(0.0f, s.freelook_return_delay);
+    g_fl_return_speed = std::max(0.0f, s.freelook_return_speed);
+    for (const char* fn : {"_ZN12FollowCamera6updateEf", "_ZN13VehicleCamera6updateEf"}) {
+        const bool vehicle = std::strstr(fn, "Vehicle") != nullptr;
+        rt.hook_function(fn, {
+            [vehicle](cpu::Cpu& c) {
+                if (!vehicle) g_follow_cam = c.reg(cpu::R0);
+                g_cam_self = g_trace_cam = c.reg(cpu::R0);
+                const uint32_t bits = c.reg(cpu::R1);
+                std::memcpy(&g_cam_dt, &bits, 4);
+                return false;
+            },
+            [](cpu::Cpu& c) {
+                const uint32_t cam = g_cam_self;
+                g_cam_self = 0;
+                if (cam && free_look_mode()) free_look_update(c, cam);
+            }});
+    }
 
     // First person (on foot): after CameraManager::update has placed the scene camera node
     // (this+0, vfuncs +0xA4 setPosition / +0x104 setTarget, the same calls the game makes), move the
@@ -491,7 +548,19 @@ void install(rt::Runtime& rt, const settings::Settings& s) {
     }, nullptr});
 }
 
-void set_camera_mode(const std::string& mode) { g_camera_mode = mode; }
+void set_camera_mode(const std::string& mode) {
+    g_camera_mode = mode == "freeform" ? "freelook" : mode;
+    g_fl.valid = false;
+}
+bool free_look_on() { return free_look_mode() && g_frame_no - g_fl_frame <= 2; }
+void camera_input(float dx, float dy) {
+    g_cam_in_x += dx;
+    g_cam_in_y += dy;
+}
+void set_free_look_return(float delay_s, float speed_deg) {
+    g_fl_return_delay = std::max(0.0f, delay_s);
+    g_fl_return_speed = std::max(0.0f, speed_deg);
+}
 void set_smooth_physics(bool on) { g_smooth_physics = on; }
 void debug_command(const std::string& cmd) { g_debug_cmds.push_back(cmd); }
 
@@ -578,6 +647,7 @@ void switch_weapon(int step) { g_weapon_steps = std::clamp(g_weapon_steps + step
 void frame(cpu::Cpu& c, double dt) {
     auto& r = c.rt();
     auto& m = r.mem();
+    ++g_frame_no;
     const uint32_t p = player_obj(r);
     if (!p) {
         g_weapon_steps = 0;
@@ -588,7 +658,7 @@ void frame(cpu::Cpu& c, double dt) {
         if (!scratch) scratch = r.heap().alloc(16);
         c.call(m.r32(m.r32(p + 4) + 0x5c), {scratch, p + 4});  // LevelObject::getPosition
         float cp[3] = {}, cl[3] = {};
-        if (const uint32_t fc = g_follow_cam)
+        if (const uint32_t fc = g_trace_cam)
             for (int i = 0; i < 3; ++i) cp[i] = f32_at(fc + 0x08 + 4 * i), cl[i] = f32_at(fc + 0x14 + 4 * i);
         LOG("[trace] f%d dt %.1f ms: player %.1f %.1f cam %.1f %.1f look %.1f %.1f yaw %.1f", ++g_trace_frame, dt * 1000,
             f32_at(scratch), f32_at(scratch + 4), cp[0], cp[1], cl[0], cl[1],
@@ -597,11 +667,32 @@ void frame(cpu::Cpu& c, double dt) {
     // Scripted test commands. nearcar: put the player 2.5 m beside the nearest empty car (the game's
     // Character::getClosestVehicleFrom, which also wants a clear line of sight), so a test can hold Y.
     for (const std::string& cmd : g_debug_cmds) {
-        if (cmd == "nearcar") {
-            uint32_t v = uint32_t(c.call(r.lib_func("_ZNK9Character21getClosestVehicleFromEb"), {p + 4, 1}));
-            if (!v) v = uint32_t(c.call(r.lib_func("_ZNK9Character21getClosestVehicleFromEb"), {p + 4, 0}));
-            static uint32_t scratch = 0;
-            if (!scratch) scratch = r.heap().alloc(16);
+        static uint32_t scratch = 0;
+        if (!scratch) scratch = r.heap().alloc(16);
+        if (cmd == "nearcar" || cmd == "nearheli") {
+            uint32_t v = 0;
+            if (cmd == "nearcar") {
+                v = uint32_t(c.call(r.lib_func("_ZNK9Character21getClosestVehicleFromEb"), {p + 4, 1}));
+                if (!v) v = uint32_t(c.call(r.lib_func("_ZNK9Character21getClosestVehicleFromEb"), {p + 4, 0}));
+            } else {
+                // Every level object: GameObjectManager::GetFirst(0), next at +0x0C.
+                c.call(m.r32(m.r32(p + 4) + 0x5c), {scratch, p + 4});
+                const float px = f32_at(scratch), py = f32_at(scratch + 4);
+                const uint32_t gom = m.r32(r.lib_object("_ZN17GameObjectManager5s_gomE"));
+                float best = 1e30f;
+                int n = 0;
+                for (uint32_t o = uint32_t(c.call(r.lib_func("_ZN17GameObjectManager8GetFirstEi"), {gom, 0})); o;
+                     o = m.r32(o + 0x0c)) {
+                    if (!c.call(r.lib_func("_ZN17GameObjectManager12isHelicopterEP11LevelObject"), {o})) continue;
+                    c.call(m.r32(m.r32(o) + 0x5c), {scratch, o});
+                    const float dx = f32_at(scratch) - px, dy = f32_at(scratch + 4) - py, d = dx * dx + dy * dy;
+                    LOG("test: helicopter %08x at %.0f %.0f %.0f (%.0f away)", o, f32_at(scratch), f32_at(scratch + 4),
+                        f32_at(scratch + 8), std::sqrt(d));
+                    ++n;
+                    if (d < best) best = d, v = o;
+                }
+                LOG("test: %d helicopters", n);
+            }
             if (v) {
                 c.call(m.r32(m.r32(v) + 0x5c), {scratch, v});  // LevelObject::getPosition
                 float pos[3];

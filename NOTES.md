@@ -1049,6 +1049,34 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   vfuncs +0xE0/+0xE4, +0xE8), buttons (jump table, types 0..11), and tilt like driving:
   `handleAcceleration` writes the vehicle's +0x3E4 (from tilt y) and +0x3E8 (tilt x minus a neutral
   value), and rolls the camera. Needs a reachable helicopter to map and test.
+  Checked 2026-11-22: the object list near the spawn has **no helicopters** (`mod nearheli` walks
+  `GameObjectManager::s_gom` → `GetFirst(0)`, next at +0x0C, `isHelicopter`); the data has only
+  heli_news / heli_police models, so flyable helicopters come with missions. With the current code
+  WASD / left stick drive the v-stick, which in a helicopter tilts the rotor (flight direction).
+  Still to do once a helicopter is reachable: dump the flying HUD (`--dump-hud`), then map VC-style
+  W/S = up/down (whatever raises EvUpDownStickMove: SlideControl +0x54 is the vertical one, +0x58
+  the horizontal), A/D = turn (+0x3E4 via a FlyingControlHandler::handleAcceleration hook like the
+  driving one, with neutral accelerometer events), controller RT/LT = up/down.
+
+### Q2 Free look (2026-11-22)
+- Camera stack: `CameraManager::update(int ms)` calls the active camera's `update(float s)` (vfunc
+  +8; FollowCamera on foot, VehicleCamera in cars, both `Camera` with position +0x08 and look-at
+  +0x14), then `updateFreeLook`, then starts 0.1 s position/look-at transitions toward the camera
+  and moves the scene node (vfuncs +0xA4 / +0x104) with explosion shake added.
+  `startPositionTransition` uses the 0.1 s only when the target moved more than sqrt(3000) ≈ 55
+  units in x/y and the target is a character on foot, else 0 = snap (checked in the recompiled code:
+  Ghidra showed the snap's t = 1.0f as 0.0). So at high fps the node normally snaps: not a latency
+  source.
+- Free look (`camera_mode = freelook`, the new default; old "freeform" maps to it): post hooks on
+  `FollowCamera::update` and `VehicleCamera::update` (VehicleCamera added to HOOKABLE) put the
+  camera at our yaw/pitch around the game's look-at, at the game's distance. Input goes straight to
+  `mods::camera_input` (no screen drags; 0.0045 rad per game pixel, full stick ≈ 180°/s at speed 1).
+  After `freelook_return_delay` s (1.5) without camera input, while the look-at point moves faster than
+  60 units/s, yaw and pitch turn toward the game's own placement at `freelook_return_speed` (90°/s).
+  Re-initialised from the game's view on a new camera, a cut or a jump. Pitch clamped -20°..69°.
+  First person uses the same yaw/pitch without the return. Verified on foot (turned 75°, stayed for
+  3.5 s standing, swung behind once walking; W walks along the view) and in a car (turned −19°
+  parked, swung back to the car's heading 89° about 2 s after driving off).
 
 ### 5C draw distance and LOD (findings 2026-11-21, nothing changed yet)
 - The `draw_distance` setting is applied once, in the `loadPerformanceProfile` hook, so it needs a

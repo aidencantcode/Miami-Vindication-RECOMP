@@ -83,6 +83,7 @@ HOOKABLE = {
     "_ZNK5Wheel6draw2dEv",
     "_ZN11Application7_UpdateEi",
     "_ZN12FollowCamera6updateEf",
+    "_ZN13VehicleCamera6updateEf",  # free look in cars (Q2)
     "_ZN13CameraManager6updateEi",
     "_ZN12FollowCamera12updateAnglesEii",
     "_ZN5Menus8MainMenu8GotFocusEv",

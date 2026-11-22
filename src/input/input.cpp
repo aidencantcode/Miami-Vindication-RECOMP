@@ -509,7 +509,10 @@ void Input::drive_gameplay(const std::vector<mods::Control>& controls, const Gam
     const float dy = float(gi.cy * speed * dt) + (invert_y_ ? -rmb_dy_ : rmb_dy_) * mouse_sens_;
     rmb_dx_ = rmb_dy_ = 0;
     const float ax = game_w_ * 0.62f, ay = game_h_ * 0.40f;  // anchor: right of center, above the buttons
-    if (dx != 0 || dy != 0 || (rmb_down_ && vt_[P_CAMERA].down)) {
+    if (mods::free_look_on()) {  // free look turns the camera directly (no drag, no smoothing)
+        set_vtouch(P_CAMERA, false, 0, 0);
+        if (dx != 0 || dy != 0) mods::camera_input(dx, dy);
+    } else if (dx != 0 || dy != 0 || (rmb_down_ && vt_[P_CAMERA].down)) {
         if (!vt_[P_CAMERA].down) {
             cam_x_ = ax;
             cam_y_ = ay;

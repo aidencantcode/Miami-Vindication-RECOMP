@@ -497,6 +497,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                     if (cfg.texture_filter != before.texture_filter) gles1::set_texture_filter(filter_of(cfg.texture_filter));
                     apply_audio_volumes(cfg);
                     if (cfg.camera_mode != before.camera_mode) mods::set_camera_mode(cfg.camera_mode);
+                    mods::set_free_look_return(cfg.freelook_return_delay, cfg.freelook_return_speed);
                     if (cfg.smooth_physics != before.smooth_physics) mods::set_smooth_physics(cfg.smooth_physics);
                     if (cfg.manual_aim_spread != before.manual_aim_spread) mods::set_manual_aim_spread(cfg.manual_aim_spread);
                     if (fast_forward) {  // speed changed in the menu
