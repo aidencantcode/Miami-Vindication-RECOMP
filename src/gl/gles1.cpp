@@ -196,10 +196,18 @@ std::vector<Mat4>* matrix_stack() {
 bool g_fog_on = false, g_depth_test = false, g_lighting = false, g_blend = false, g_depth_write = true;
 float g_depth_range_near = 0, g_depth_range_far = 1;  // glDepthRange: near city [0, 0.2], sky and far city [0.2, 1]
 GLenum g_blend_dst = GL_ZERO;
-bool g_fog_forced = false;  // atmospheric fog enabled GL_FOG for this draw (the game had it off)
+bool g_fog_actual = false;  // GL_FOG as GL has it now (the game's call, or fog_before_draw's override)
+bool g_stencil_on = false;  // the game's GL_STENCIL_TEST (it never turned it on in the traces)
 void track_cap(GLenum cap, bool on) {
     switch (cap) {
-        case GL_FOG: g_fog_on = on; g_fog_forced = false; break;  // the game's call sets the real state
+        case GL_FOG: g_fog_on = on; g_fog_actual = on; break;  // the game's call sets the real state
+        case GL_STENCIL_TEST:
+            g_stencil_on = on;
+            if (static bool logged = false; on && !logged) {
+                logged = true;
+                LOG("GL: the game uses the stencil test (the sea's stencil mark, bit 0x80, may clash)");
+            }
+            break;
         case GL_DEPTH_TEST: g_depth_test = on; break;
         case GL_LIGHTING: g_lighting = on; break;
         case GL_BLEND: g_blend = on; break;
@@ -285,7 +293,7 @@ const void* array_ptr(Cpu& c, uint32_t p, bool bound) {
 // ---- state -----------------------------------------------------------------------------------------
 void set_cap(GLenum cap, bool on) {
     track_cap(cap, on);
-    if (g_shader && cap == GL_FOG) ffp::set_fog_forced(false);  // the game's own fog call wins (as in GL)
+    if (g_shader && cap == GL_FOG) ffp::set_fog_override(0);  // the game's own fog call wins (as in GL)
     if (g_shader && ffp::is_ffp_cap(cap)) ffp::enable(cap, on, active_unit());
     else if (on) glEnable(cap);
     else glDisable(cap);
@@ -352,14 +360,26 @@ H(hint) {
     GLenum t = a.u32(), m = a.u32();
     if (!g_shader || t == GL_GENERATE_MIPMAP_HINT) glHint(t, m);  // the only GLES 1 hint GLES 3 still has
 }
-H(stencil_func) { GLenum f = a.u32(); GLint r = a.s32(); GLuint m = a.u32(); glStencilFunc(f, r, m); }
-H(stencil_mask) { glStencilMask(a.u32()); }
-H(stencil_op) { GLenum f = a.u32(), zf = a.u32(), zp = a.u32(); glStencilOp(f, zf, zp); }
+// the game's stencil state (the sea's draws change it and put it back)
+GLenum g_st_func = GL_ALWAYS, g_st_op[3] = {GL_KEEP, GL_KEEP, GL_KEEP};
+GLint g_st_ref = 0;
+GLuint g_st_vmask = 0xFFFFFFFFu, g_st_wmask = 0xFFFFFFFFu;
+H(stencil_func) { g_st_func = a.u32(); g_st_ref = a.s32(); g_st_vmask = a.u32(); glStencilFunc(g_st_func, g_st_ref, g_st_vmask); }
+H(stencil_mask) { g_st_wmask = a.u32(); glStencilMask(g_st_wmask); }
+H(stencil_op) { for (GLenum& o : g_st_op) o = a.u32(); glStencilOp(g_st_op[0], g_st_op[1], g_st_op[2]); }
 H(pixel_storei) { GLenum p = a.u32(); GLint v = a.s32(); glPixelStorei(p, v); }
 H(clear) {
     GLbitfield m = a.u32();
     trace_event("clear%s%s%s (fb %u)", m & GL_COLOR_BUFFER_BIT ? " color" : "", m & GL_DEPTH_BUFFER_BIT ? " depth" : "",
                 m & GL_STENCIL_BUFFER_BIT ? " stencil" : "", g_game_fb);
+    // the sea's stencil mark lives for one frame: cleared with the depth (the game never clears the stencil)
+    if ((m & GL_DEPTH_BUFFER_BIT) && !(m & GL_STENCIL_BUFFER_BIT) && !g_stencil_on) {
+        m |= GL_STENCIL_BUFFER_BIT;
+        if (g_st_wmask != 0xFFFFFFFFu) glStencilMask(0xFF);
+        glClear(m);
+        if (g_st_wmask != 0xFFFFFFFFu) glStencilMask(g_st_wmask);
+        return;
+    }
     glClear(m);
 }
 H(clear_color) { float r = a.f32(), g = a.f32(), b = a.f32(), al = a.f32(); glClearColor(r, g, b, al); }
@@ -516,8 +536,10 @@ post::Scene g_post_scene;
 bool g_post_pending = false;   // a 3D scene was drawn on screen this frame and has not been processed
 bool g_post_view_seen = false; // the camera view matrix was taken from a city draw this frame
 float g_cam_view[16];          // the engine camera's view (set_camera_view)
+float g_cam_inv[16];           // and its inverse (eye -> world)
 bool g_cam_view_set = false;
-float g_fog_rgb[3] = {0.6f, 0.65f, 0.7f};
+float g_fog_rgb[3] = {0.6f, 0.65f, 0.7f};      // the game's fog colour (time of day)
+float g_fog_col_actual[3] = {-1, -1, -1};       // the colour GL has (the game's, or the late fog's)
 float g_fog_density_now = 0;
 
 // One fog parameter to whichever pipeline is in use.
@@ -526,7 +548,11 @@ void fog_param(GLenum p, float v) {
     else glFogf(p, v);
 }
 void apply_fog() {
-    if (g_fog_cfg.atmospheric) {
+    if (g_fog_cfg.atmospheric && g_fog_cfg.screen) {
+        g_fog_density_now = post::late_fog().density;  // only for the draws after the screen pass
+        fog_param(GL_FOG_MODE, float(GL_EXP2));
+        fog_param(GL_FOG_DENSITY, g_fog_density_now);
+    } else if (g_fog_cfg.atmospheric) {
         // exp(-(d*z)^2) = 3% at `far`: d*far = sqrt(-ln 0.03) = 1.873
         const float d = g_fog_cfg.strength <= 0 ? 0.0f : 1.873f * g_fog_cfg.strength / std::max(1.0f, g_fog_cfg.far_end);
         g_fog_density_now = d;
@@ -557,7 +583,9 @@ bool is_world_tex(GLuint tex);
 // Screen effects run on the finished 3D scene: at the first 2D (orthographic) draw on screen after
 // it, else at present. 3D draws record the projections of the two depth ranges and, from a city
 // batch (world texture, drawn in world space), the camera's view matrix.
-void run_post() {
+bool g_post_split = false;     // the atmosphere stage ran this frame (just before the first glow)
+int g_glow_draws = 0;         // glow draws since the last atmosphere stage (a car light's quads share one)
+void run_post(post::Stage stage) {
     g_post_pending = false;
     if (!post::active()) return;
     post::Scene& s = g_post_scene;
@@ -566,10 +594,18 @@ void run_post() {
     s.h = g_cfg.height;
     std::memcpy(s.fog_color, g_fog_rgb, sizeof s.fog_color);
     s.fog_density = g_fog_density_now;
-    trace_event("screen effects");
-    post::run(s, !g_shader);
+    trace_event(stage == post::Stage::Atmosphere ? "screen effects: atmosphere"
+                : stage == post::Stage::Finish   ? "screen effects: finish"
+                                                 : "screen effects");
+    post::run(s, !g_shader, stage);
     if (g_shader) ffp::invalidate();
+    if (stage != post::Stage::Finish) {  // the lights took the glows recorded since the last time
+        s.glow_count = 0;
+        g_glow_draws = 0;
+    }
 }
+// End of the 3D scene: the finish, or everything when no glow split the frame.
+void run_post() { run_post(g_post_split ? post::Stage::Finish : post::Stage::All); }
 void post_before_draw(GLuint tex0) {
     if (!on_screen()) return;
     const Mat4& p = g_proj.back();
@@ -579,6 +615,13 @@ void post_before_draw(GLuint tex0) {
     }
     g_post_pending = true;
     if (!is_world_projection(p)) return;
+    // The first glow (additive) after the solid city and the sea: the atmosphere stage runs now, so
+    // lamp, neon and headlight glows are drawn over the fogged, lit scene instead of being fogged by it.
+    if (!g_post_split && g_post_view_seen && g_blend && g_blend_dst == GL_ONE && !is_sky_draw() && post::active()) {
+        run_post(post::Stage::Atmosphere);
+        g_post_split = true;
+        g_post_pending = true;  // the glows and the rest of the scene are still to come
+    }
     post::Scene& s = g_post_scene;
     if (g_depth_range_far < 0.999f) {
         s.split = g_depth_range_far;
@@ -624,13 +667,35 @@ void fog_before_draw() {
     const Mat4& pr = g_proj.back();
     const bool sky = g_depth_range_far >= 0.999f && proj_near(pr) < 1000.0f;
     const bool additive = g_blend && g_blend_dst == GL_ONE;
-    const bool force = g_fog_cfg.atmospheric && g_fog_cfg.fog_everything && !g_fog_on && !additive && g_depth_test &&
-                       !sky && is_world_projection(pr);
-    if (force == g_fog_forced) return;
-    if (g_shader) ffp::set_fog_forced(force);
-    else if (force) glEnable(GL_FOG);
+    bool want;
+    if (g_fog_cfg.atmospheric && g_fog_cfg.screen) {
+        // The screen pass fogs the solid scene and the sea; what is drawn after it (glows, decals) gets
+        // the same haze by eye distance here, glows fading to black (their colour is light).
+        const post::LateFog late = post::late_fog();
+        want = g_post_split && late.density > 0 && g_depth_test && !sky && is_world_projection(pr);
+        if (want) {
+            static const float black[3] = {0, 0, 0};
+            const float* col = additive ? black : late.color;
+            if (std::memcmp(col, g_fog_col_actual, sizeof g_fog_col_actual) != 0) {
+                const float v[4] = {col[0], col[1], col[2], 1.0f};
+                if (g_shader) ffp::fog(GL_FOG_COLOR, v, 4);
+                else glFogfv(GL_FOG_COLOR, v);
+                std::memcpy(g_fog_col_actual, col, sizeof g_fog_col_actual);
+            }
+            if (late.density != g_fog_density_now) {
+                g_fog_density_now = late.density;
+                fog_param(GL_FOG_DENSITY, late.density);
+            }
+        }
+    } else {
+        want = g_fog_on || (g_fog_cfg.atmospheric && g_fog_cfg.fog_everything && !additive && g_depth_test && !sky &&
+                            is_world_projection(pr));
+    }
+    if (want == g_fog_actual) return;
+    if (g_shader) ffp::set_fog_override(want ? 1 : -1);
+    else if (want) glEnable(GL_FOG);
     else glDisable(GL_FOG);
-    g_fog_forced = force;
+    g_fog_actual = want;
 }
 
 H(fogf) {
@@ -641,7 +706,10 @@ H(fogf) {
 H(fogfv) {
     GLenum p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32()));
     light_trace("glFogfv", p, 0, v, param_count(p));
-    if (p == GL_FOG_COLOR) std::memcpy(g_fog_rgb, v, sizeof g_fog_rgb);
+    if (p == GL_FOG_COLOR) {
+        std::memcpy(g_fog_rgb, v, sizeof g_fog_rgb);
+        std::memcpy(g_fog_col_actual, v, sizeof g_fog_col_actual);
+    }
     if (param_count(p) != 1 || !game_fog_param(p, v[0])) {
         if (g_shader) ffp::fog(p, v, param_count(p));
         else glFogfv(p, v);
@@ -754,11 +822,11 @@ void trace_geometry(Cpu& c, GLint first, GLsizei n, GLenum itype, uint32_t iptr,
 // with its centre (eye space, through its own modelview), size, atlas rectangle (after the texture
 // matrix) and whether it is a city billboard (drawn with the camera view) or a car's light (a model
 // matrix; the model origin is the light's mount point). Client arrays only.
-int g_glow_draws = 0;  // glow draws this frame
+// (g_glow_draws: with the post state above)
 GLuint bound_tex0();
 void glow_capture(Cpu& c, GLenum mode, GLint first, GLsizei n, GLenum itype, uint32_t iptr) {
     if (!on_screen() || !g_blend || g_blend_dst != GL_ONE || !is_world_projection(g_proj.back()) || g_dbg_vtx.buf ||
-        !g_dbg_vtx.ptr || n <= 0)
+        !g_dbg_vtx.ptr || n <= 0 || !g_cam_view_set)
         return;
     post::Scene& s = g_post_scene;
     const Mat4& mv = g_mv.back();
@@ -789,9 +857,11 @@ void glow_capture(Cpu& c, GLenum mode, GLint first, GLsizei n, GLenum itype, uin
         }
         const float o[3] = {(lo[0] + hi[0]) * 0.5f, (lo[1] + hi[1]) * 0.5f, (lo[2] + hi[2]) * 0.5f};
         post::Scene::Glow& g = s.glows[s.glow_count];
-        for (int k = 0; k < 3; ++k) {
-            g.eye[k] = mv.m[k] * o[0] + mv.m[4 + k] * o[1] + mv.m[8 + k] * o[2] + mv.m[12 + k];
-            g.origin[k] = mv.m[12 + k];
+        float eye[3];
+        for (int k = 0; k < 3; ++k) eye[k] = mv.m[k] * o[0] + mv.m[4 + k] * o[1] + mv.m[8 + k] * o[2] + mv.m[12 + k];
+        for (int k = 0; k < 3; ++k) {  // to world with the camera of this frame
+            g.pos[k] = g_cam_inv[k] * eye[0] + g_cam_inv[4 + k] * eye[1] + g_cam_inv[8 + k] * eye[2] + g_cam_inv[12 + k];
+            g.origin[k] = g_cam_inv[k] * mv.m[12] + g_cam_inv[4 + k] * mv.m[13] + g_cam_inv[8 + k] * mv.m[14] + g_cam_inv[12 + k];
         }
         // size in world units: the model matrix may scale (car lights)
         const float scale = std::sqrt(mv.m[0] * mv.m[0] + mv.m[1] * mv.m[1] + mv.m[2] * mv.m[2]);
@@ -802,8 +872,8 @@ void glow_capture(Cpu& c, GLenum mode, GLint first, GLsizei n, GLenum itype, uin
         g.world = world;
         g.draw = draw;
         if (frame_tracing() && q < 6 * 3)
-            LOG("frame-trace glow tex %u draw %d n %d: eye %.0f %.0f %.0f size %.0f uv %.3f..%.3f x %.3f..%.3f origin %.0f %.0f %.0f %s",
-                g.tex, draw, int(n), g.eye[0], g.eye[1], g.eye[2], g.size, uv[0], uv[2], uv[1], uv[3], g.origin[0], g.origin[1],
+            LOG("frame-trace glow tex %u draw %d n %d: at %.0f %.0f %.0f size %.0f uv %.3f..%.3f x %.3f..%.3f origin %.0f %.0f %.0f %s",
+                g.tex, draw, int(n), g.pos[0], g.pos[1], g.pos[2], g.size, uv[0], uv[2], uv[1], uv[3], g.origin[0], g.origin[1],
                 g.origin[2], world ? "city" : "model");
         ++s.glow_count;
     }
@@ -838,6 +908,43 @@ ffp::DrawState draw_state() {
     return {g_proj.back().m, g_mv.back().m, {g_texm[0].back().m, g_texm[1].back().m, g_texm[2].back().m}, g_bound_2d,
             g_array_buffer};
 }
+// ---- the sea (set_water_texture) -----------------------------------------------------------------
+std::unordered_set<GLuint> g_water_tex;
+bool g_water_draw = false;  // this draw is the sea: marks the stencil (put back after it)
+void water_before_draw(Cpu& c, GLuint tex0, GLint first, GLsizei n, GLenum itype, uint32_t iptr) {
+    g_water_draw = !g_water_tex.empty() && g_water_tex.count(tex0) && on_screen() && is_world_projection(g_proj.back()) &&
+                   g_depth_test && !g_stencil_on && post::active();
+    if (!g_water_draw) return;
+    glEnable(GL_STENCIL_TEST);
+    glStencilFunc(GL_ALWAYS, GLint(post::kWaterStencil), post::kWaterStencil);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+    glStencilMask(post::kWaterStencil);
+    // its height: a vertex through the modelview and the inverse camera view (the sea is flat)
+    post::Scene& s = g_post_scene;
+    if (!s.water_seen && g_cam_view_set && g_dbg_vtx.ptr && !g_dbg_vtx.buf && g_dbg_vtx.size >= 3 && n > 0) {
+        uint32_t i = uint32_t(first);
+        if (iptr) i = itype == GL_UNSIGNED_SHORT ? M.r16(iptr) : itype == GL_UNSIGNED_BYTE ? M.r8(iptr) : M.r32(iptr);
+        const float v[3] = {dbg_component(c, g_dbg_vtx, i, 0), dbg_component(c, g_dbg_vtx, i, 1), dbg_component(c, g_dbg_vtx, i, 2)};
+        const Mat4& mv = g_mv.back();
+        float e[3], inv[16];
+        for (int k = 0; k < 3; ++k) e[k] = mv.m[k] * v[0] + mv.m[4 + k] * v[1] + mv.m[8 + k] * v[2] + mv.m[12 + k];
+        if (glmath::invert4(g_cam_view, inv)) {
+            s.water_z = inv[2] * e[0] + inv[6] * e[1] + inv[10] * e[2] + inv[14];
+            s.water_seen = std::isfinite(s.water_z);
+            static int logged = 0;
+            if (s.water_seen && logged++ == 0) LOG("GL: the sea (texture %u) is at height %.0f", tex0, s.water_z);
+        }
+    }
+}
+void water_after_draw() {
+    if (!g_water_draw) return;
+    g_water_draw = false;
+    glDisable(GL_STENCIL_TEST);  // the game's: off (water_before_draw only marks when it is)
+    glStencilFunc(g_st_func, g_st_ref, g_st_vmask);
+    glStencilOp(g_st_op[0], g_st_op[1], g_st_op[2]);
+    glStencilMask(g_st_wmask);
+}
+
 H(draw_arrays) {
     GLenum m = a.u32(); GLint f = a.s32(); GLsizei n = a.s32();
     trace_draw(bound_tex0(), n);
@@ -846,8 +953,10 @@ H(draw_arrays) {
     glow_capture(c, m, f, n, 0, 0);
     tint_before_draw();
     fog_before_draw();
+    water_before_draw(c, bound_tex0(), f, n, 0, 0);
     if (g_shader) ffp::draw_arrays(m, f, n, draw_state());
     else glDrawArrays(m, f, n);
+    water_after_draw();
     ++g_draws;
 }
 H(draw_elements) {
@@ -858,8 +967,10 @@ H(draw_elements) {
     if (!g_element_buffer) glow_capture(c, m, 0, n, t, ip);
     tint_before_draw();
     fog_before_draw();
+    water_before_draw(c, bound_tex0(), 0, n, t, g_element_buffer ? 0 : ip);
     if (g_shader) ffp::draw_elements(m, n, t, array_ptr(c, ip, g_element_buffer), draw_state());
     else glDrawElements(m, n, t, array_ptr(c, ip, g_element_buffer));
+    water_after_draw();
     ++g_draws;
 }
 
@@ -1254,14 +1365,20 @@ void set_shader_renderer(bool on) { g_shader = on; }
 #endif
 bool shader_renderer() { return g_shader; }
 
+void set_water_texture(unsigned tex, bool water) {
+    if (water) g_water_tex.insert(tex);
+    else g_water_tex.erase(tex);
+}
+
 void set_camera_view(const float view[16]) {
+    if (!glmath::invert4(view, g_cam_inv)) return;
     std::memcpy(g_cam_view, view, sizeof g_cam_view);
     g_cam_view_set = true;
 }
 
 void set_fog(const FogConfig& f) {
     if (f.atmospheric == g_fog_cfg.atmospheric && f.far_end == g_fog_cfg.far_end && f.strength == g_fog_cfg.strength &&
-        f.fog_everything == g_fog_cfg.fog_everything)
+        f.fog_everything == g_fog_cfg.fog_everything && f.screen == g_fog_cfg.screen)
         return;
     g_fog_cfg = f;
     apply_fog();
@@ -1399,9 +1516,13 @@ void vfb_present(int win_w, int win_h, Fit fit, bool linear, int* rx, int* ry, i
         run_post();
     }
     g_post_view_seen = false;
+    g_post_split = false;
     g_post_scene.view_valid = false;
-    g_post_scene.glow_count = 0;
-    g_glow_draws = 0;
+    g_post_scene.water_seen = false;
+    if (!post::active() || g_post_scene.glow_count >= post::Scene::kMaxGlows) {  // else the atmosphere stage takes them
+        g_post_scene.glow_count = 0;
+        g_glow_draws = 0;
+    }
     trace_event("present (end of frame %d)", g_frame);
     ++g_frame;
     // Save the GL state we touch, so the game's (possibly one-time) settings survive.

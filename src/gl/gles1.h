@@ -70,6 +70,8 @@ struct FogConfig {
     float far_end = 60000;        // world units
     float strength = 1;
     bool fog_everything = true;   // also fog opaque 3D draws the game leaves unfogged (people, cars)
+    bool screen = false;          // the screen pass fogs the scene (post::screen_fog()): GL fog only for
+                                  // what is drawn after it (glows, decals), at post::late_fog()
 };
 void set_fog(const FogConfig& f);
 
@@ -78,6 +80,11 @@ void set_fog(const FogConfig& f);
 // that is current when the city is drawn, instead of guessing it from a draw's modelview (which picked
 // a boat's or a prop's matrix in some views: fog and lights then jumped with the camera angle).
 void set_camera_view(const float view[16]);
+
+// The sea's textures (game/night_textures knows them by content). Their draws mark the stencil
+// (post::kWaterStencil) and record the sea's height, so the screen fog measures to the sea's surface
+// (the depth under the blended sea is the sea bed or the sky) and can give it less fog.
+void set_water_texture(unsigned tex, bool water);
 
 // Texture filtering override (applied live to every texture whose filters the game set).
 enum class TextureFilter { Game, Nearest, Bilinear, Trilinear };

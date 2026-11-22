@@ -47,8 +47,9 @@ void fog(GLenum pname, const float* v, int n);
 void alpha_func(GLenum func, float ref);
 void point_size(float s);
 void clip_plane(int i, const float eye_plane[4]);  // already in eye space (GL semantics)
-// The bridge's own additions: fog forced on for this draw, the time-of-day tint (nullptr = none).
-void set_fog_forced(bool on);
+// The bridge's own additions: fog for this draw (0 the game's GL_FOG, 1 forced on, -1 forced off), the
+// time-of-day tint (nullptr = none).
+void set_fog_override(int o);
 void set_tint(const float* rgb);
 // Base format of a texture (GL_ALPHA, GL_LUMINANCE, GL_LUMINANCE_ALPHA, GL_RGB, GL_RGBA): the
 // texture environment depends on it.

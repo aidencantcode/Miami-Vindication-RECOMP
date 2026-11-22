@@ -115,9 +115,17 @@ void apply_post_settings(const settings::Settings& s) {
     p.bloom_radius = s.bloom_radius;
     p.bloom_adaptive = s.bloom_adaptive;
     p.bloom_day = s.bloom_day;
+    p.fog = s.fog == "atmospheric";
+    p.fog_palette = s.fog_colors != "game";
+    p.fog_day = s.fog_day;
+    p.fog_golden = s.fog_golden;
+    p.fog_night = s.fog_night;
+    p.water_fog = s.water_fog;
+    p.sunset_colour = s.sunset_colour;
     p.height_fog = s.height_fog;
     p.height_fog_amount = s.height_fog_amount;
     p.sky_haze = s.fog == "atmospheric" && s.sky_haze;
+    p.muzzle_flash = s.muzzle_flash;
     p.lights = s.dynamic_lights;
     p.lights_intensity = s.dynamic_lights_intensity;
     p.street_lights = s.street_lights;
@@ -511,7 +519,8 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 }
                 gles1::FogConfig fog;
                 fog.atmospheric = cfg.fog == "atmospheric";
-                fog.strength = cfg.fog_strength;
+                fog.screen = fog.atmospheric && post::screen_fog();  // else the old GL fog (no screen effects)
+                fog.strength = 1.0f;
                 // Fog reaches its end where the far city ends, but at most twice the profile's own
                 // distance: it hides the city's edge at short draw distances and stays atmospheric haze
                 // (not gone) at long ones.

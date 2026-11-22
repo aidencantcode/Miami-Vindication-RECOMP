@@ -237,17 +237,27 @@ void self_check() {
     LOG("night textures check: %d levels match their own file, %d do not", ok, bad);
 }
 
+// The sea and the swamp: the GL bridge marks their pixels for the screen fog (gles1::set_water_texture).
+bool is_water(int pair) {
+    const std::string n = g_pairs[size_t(pair)].day.stem().string();
+    return n == "water" || n == "water_lo" || n == "swamp_water" || n == "sea_foam_00";  // foam: the strip along the shore
+}
+
 void on_upload(unsigned tex, int level, unsigned format, int w, int h, const uint8_t* data, int size) {
     if (!tex) return;
     if (level == 0) {
         const Known* match = find_match(tex, data, size, w, h);
         if (!match) {
-            if (g_tex.erase(tex)) gles1::set_world_texture(tex, gles1::WorldTex::None);  // the id now holds something else
+            if (g_tex.erase(tex)) {  // the id now holds something else
+                gles1::set_world_texture(tex, gles1::WorldTex::None);
+                gles1::set_water_texture(tex, false);
+            }
             return;
         }
         Tex& t = g_tex[tex];
         t = {match->pair, match->base_level, 1, format, false};
         gles1::set_world_texture(tex, gles1::WorldTex::Day);  // shows its day image: gets the time-of-day tint
+        gles1::set_water_texture(tex, is_water(match->pair));
         if (g_night) g_queue.push_back(tex);  // loaded during the night: give it its night image
     } else if (auto it = g_tex.find(tex); it != g_tex.end()) {
         it->second.levels = std::max(it->second.levels, level + 1);
@@ -291,6 +301,7 @@ bool init(const fs::path& data_dir) {
     obs.on_delete = [](unsigned tex) {
         g_tex.erase(tex);
         gles1::set_world_texture(tex, gles1::WorldTex::None);
+        gles1::set_water_texture(tex, false);
     };
     gles1::set_texture_observer(std::move(obs));
     g_ready = !g_by_fp.empty();

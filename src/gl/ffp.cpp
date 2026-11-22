@@ -85,7 +85,8 @@ struct State {
     int fog_mode = 2;                  // 1 LINEAR 2 EXP 3 EXP2
     float fog_start = 0, fog_end = 1, fog_density = 1;
     float fog_color[4] = {0, 0, 0, 0};
-    bool fog_radial = false, fog_forced = false;
+    bool fog_radial = false;
+    int fog_override = 0;              // the bridge: 0 the game's GL_FOG, 1 forced on, -1 forced off
     float point_size = 1;
     float tint[3] = {1, 1, 1};
 };
@@ -417,7 +418,7 @@ void upload(const DrawState& s, GLenum mode) {
 
 // The ivec2 switches (fog mode / radial, alpha test function, clip planes), cached like the rest.
 void upload_ivecs() {
-    const bool fog_on = g.fog || g.fog_forced;
+    const bool fog_on = g.fog_override ? g.fog_override > 0 : g.fog;
     const int fog[2] = {fog_on ? g.fog_mode : 0, g.fog_radial ? 1 : 0};
     if (fog[0] != C.fog[0] || fog[1] != C.fog[1]) {
         p_glUniform2i(L.fog, fog[0], fog[1]);
@@ -652,7 +653,7 @@ void clip_plane(int i, const float eye_plane[4]) {
     if (i >= 0 && i < 2) std::memcpy(g.clip_plane[i], eye_plane, sizeof g.clip_plane[i]);
 }
 
-void set_fog_forced(bool on) { g.fog_forced = on; }
+void set_fog_override(int o) { g.fog_override = o; }
 
 void set_tint(const float* rgb) {
     if (rgb) std::memcpy(g.tint, rgb, sizeof g.tint);

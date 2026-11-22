@@ -254,17 +254,36 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
                             {{"atmospheric", "Atmospheric (haze by distance, hides the horizon)"},
                              {"game", "Game (thin, only on the far city)"}});
             if (s.fog == "atmospheric") {
-                ch |= ImGui::SliderFloat("Fog strength", &s.fog_strength, 0.0f, 2.0f, "%.2f");
+                ImGui::Indent();
+                ch |= combo_str("Fog colours", &s.fog_colors,
+                                {{"miami", "Miami palette (a gradient by time of day)"}, {"game", "The game's own (one colour)"}});
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Miami palette: peach and lavender at sunrise, a pale yellow-and-blue haze by day,\n"
+                                      "amber, coral and violet at sunset, indigo at night. Warmer toward the sun,\n"
+                                      "bluer higher up, like the sky.");
+                ch |= ImGui::SliderFloat("Daytime fog", &s.fog_day, 0.0f, 2.0f, "%.2f");
+                ch |= ImGui::SliderFloat("Sunrise and sunset fog", &s.fog_golden, 0.0f, 2.0f, "%.2f");
+                ch |= ImGui::SliderFloat("Night fog", &s.fog_night, 0.0f, 2.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How thick the haze is at each time of day; it blends slowly between them.\n"
+                                      "1 = the far city is almost hidden at its end.");
+                ch |= ImGui::SliderFloat("Fog on the sea", &s.water_fog, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("How much of the fog the sea gets (keeps its colour and reflections).");
                 ch |= ImGui::Checkbox("Sky fades into the fog", &s.sky_haze);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("The sky near the horizon takes the fog colour, so the fogged far city\n"
                                       "and the sky meet instead of the city standing out as a grey band.");
+                ImGui::Unindent();
             }
-            ch |= ImGui::Checkbox("Ground fog and sun haze", &s.height_fog);
+            ch |= ImGui::Checkbox("Ground fog", &s.height_fog);
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Extra haze close to the ground and over the sea, and a warm glow toward\n"
-                                  "the sun at sunrise and sunset (screen effect).");
+                ImGui::SetTooltip("Extra haze low over the streets and the sea, thickest at sunrise and sunset\n"
+                                  "(follows the fog amounts above).");
             if (s.height_fog) ch |= ImGui::SliderFloat("Ground fog amount", &s.height_fog_amount, 0.0f, 2.0f, "%.2f");
+            ch |= ImGui::SliderFloat("Sunrise and sunset colour", &s.sunset_colour, 0.0f, 2.0f, "%.2f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Colour grade by time of day: richer, warmer light with violet shade at sunrise\n"
+                                  "and sunset, a light yellow-and-blue touch by day, none at night. 0 = off.");
             ch |= ImGui::Checkbox("Dynamic lights", &s.dynamic_lights);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Street lamps, neon, headlights and taillights light up the street, walls,\n"
@@ -283,6 +302,8 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Lamps beyond the game's own glow range show as soft points of light,\n"
                                       "so lit streets stay visible far away.");
+                ch |= ImGui::SliderFloat("Muzzle flash light", &s.muzzle_flash, 0.0f, 1.0f, "%.2f");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Light around you when you shoot (stronger at night).");
                 ch |= ImGui::SliderInt("Most lights at once", &s.max_lights, 16, 256);
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Lower is faster (phones, handhelds).");
                 ImGui::Unindent();

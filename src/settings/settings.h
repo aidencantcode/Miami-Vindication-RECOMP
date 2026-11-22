@@ -31,8 +31,13 @@ struct Settings {
     bool night_textures = true;             // restore the unused night city textures (game/night_textures)
     float night_people_lift = 0.35f;        // people/cars at night and dusk: 0 = as dark as the city, 1 = as the game drew them
     std::string fog = "atmospheric";        // game (thin, only on the far city) | atmospheric (haze by distance, hides the horizon)
-    float fog_strength = 1.5f;              // atmospheric fog: 0 = none, 1 = 97% at the far city's end
+    std::string fog_colors = "miami";       // atmospheric fog colours: miami (palette by time of day, a gradient) | game
+    float fog_day = 0.15f;                  // atmospheric fog amount by day, at sunrise/sunset, at night:
+    float fog_golden = 1.0f;                //   0 = none, 1 = 97% at the far city's end (0..2)
+    float fog_night = 0.45f;
+    float water_fog = 0.35f;                // 0..1: how much of the fog the sea gets
     bool sky_haze = true;                   // atmospheric fog: the sky fades into the fog at the horizon
+    float sunset_colour = 1.0f;             // 0..2: colour grade by time of day (rich sunrise / sunset, mild by day)
     bool bloom = true;                      // glow around bright parts (screen effect)
     float bloom_intensity = 0.8f;           // 0..2 (up to 3x more at night, see post.cpp)
     float bloom_threshold = 0.75f;          // 0..1: brightness where the glow starts
@@ -40,7 +45,7 @@ struct Settings {
     bool bloom_adaptive = true;             // by time of day: none by day, easing in at sunset/dawn, full at night
     float bloom_day = 0.0f;                 // 0..1: daytime bloom when adaptive (fraction of the night's)
     bool height_fog = true;                 // fog step 2: thicker near the ground and the sea, sun haze
-    float height_fog_amount = 1.0f;         // 0..2
+    float height_fog_amount = 1.0f;         // 0..2 (times the fog amount of the time of day)
     bool dynamic_lights = true;             // light pools around lamps, neon and car lights (from the game's glow sprites)
     float dynamic_lights_intensity = 1.0f;  // 0..2: all dynamic lights
     float street_lights = 1.0f;             // 0..3: lamps and neon light the street, walls and people
@@ -51,6 +56,7 @@ struct Settings {
     float light_distance = 200.0f;          // metres: lamps up to this far light the street
     bool light_coronas = true;              // far lamps the game no longer draws show as points of light
     int max_lights = 128;                   // lights per frame (8..256; fewer = faster)
+    float muzzle_flash = 0.35f;             // 0..1: light from the player's muzzle flashes (dynamic lights)
 
     // [controls]
     std::string touch_controls = "auto";    // auto (hide while a pad/keyboard drives) | show | hide
