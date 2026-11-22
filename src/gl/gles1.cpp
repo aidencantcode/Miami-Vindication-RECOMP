@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "core/log.h"
+#include "gl/post.h"
 #include "rt/runtime.h"
 
 namespace gles1 {
@@ -427,13 +428,22 @@ FogConfig g_fog_cfg;
 bool g_fog_radial = false;    // GL_NV_fog_distance available
 constexpr GLenum kFogDistanceMode = 0x855A, kEyeRadial = 0x855B, kEyePlaneAbsolute = 0x855C;
 
+// ---- screen effects (post.h): what the scene used, and when it ends -----------------------------
+post::Scene g_post_scene;
+bool g_post_pending = false;   // a 3D scene was drawn on screen this frame and has not been processed
+bool g_post_view_seen = false; // the camera view matrix was taken from a city draw this frame
+float g_fog_rgb[3] = {0.6f, 0.65f, 0.7f};
+float g_fog_density_now = 0;
+
 void apply_fog() {
     if (g_fog_cfg.atmospheric) {
         // exp(-(d*z)^2) = 3% at `far`: d*far = sqrt(-ln 0.03) = 1.873
         const float d = g_fog_cfg.strength <= 0 ? 0.0f : 1.873f * g_fog_cfg.strength / std::max(1.0f, g_fog_cfg.far_end);
+        g_fog_density_now = d;
         glFogi(GL_FOG_MODE, GL_EXP2);
         glFogf(GL_FOG_DENSITY, d);
     } else {
+        g_fog_density_now = 0;
         glFogi(GL_FOG_MODE, g_game_fog.mode);
         glFogf(GL_FOG_START, g_game_fog.start);
         glFogf(GL_FOG_END, g_game_fog.end);
@@ -452,6 +462,48 @@ bool game_fog_param(GLenum p, float v) {
     }
     return g_fog_cfg.atmospheric;
 }
+bool is_world_tex(GLuint tex);
+// Screen effects run on the finished 3D scene: at the first 2D (orthographic) draw on screen after
+// it, else at present. 3D draws record the projections of the two depth ranges and, from a city
+// batch (world texture, drawn in world space), the camera's view matrix.
+void run_post() {
+    g_post_pending = false;
+    if (!post::active()) return;
+    post::Scene& s = g_post_scene;
+    s.fbo = g_vfb;
+    s.w = g_cfg.width;
+    s.h = g_cfg.height;
+    std::memcpy(s.fog_color, g_fog_rgb, sizeof s.fog_color);
+    s.fog_density = g_fog_density_now;
+    trace_event("screen effects");
+    post::run(s);
+}
+void post_before_draw(GLuint tex0) {
+    if (!on_screen()) return;
+    const Mat4& p = g_proj.back();
+    if (!is_perspective(p)) {
+        if (g_post_pending) run_post();
+        return;
+    }
+    g_post_pending = true;
+    if (!is_world_projection(p)) return;
+    post::Scene& s = g_post_scene;
+    if (g_depth_range_far < 0.999f) {
+        s.split = g_depth_range_far;
+        s.near_n = proj_near(p);
+        s.near_f = proj_far(p);
+        s.tan_half_x = 1.0f / p.m[0];
+        s.tan_half_y = 1.0f / p.m[5];
+        if (!g_post_view_seen && is_world_tex(tex0)) {
+            std::memcpy(s.view, g_mv.back().m, sizeof s.view);
+            s.view_valid = g_post_view_seen = true;
+        }
+    } else if (!is_sky_draw()) {
+        s.far_n = proj_near(p);
+        s.far_f = proj_far(p);
+    }
+}
+
 // People and cars are drawn without fog (they were always close on the phone); with atmospheric
 // fog every opaque 3D draw is fogged, so a far car sits in the haze like the street around it.
 void fog_before_draw() {
@@ -471,6 +523,7 @@ H(fogf) {
 H(fogfv) {
     GLenum p = a.u32(); auto v = static_cast<const GLfloat*>(host(c, a.u32()));
     light_trace("glFogfv", p, 0, v, param_count(p));
+    if (p == GL_FOG_COLOR) std::memcpy(g_fog_rgb, v, sizeof g_fog_rgb);
     if (param_count(p) != 1 || !game_fog_param(p, v[0])) glFogfv(p, v);
 }
 H(lightf) { GLenum l = a.u32(), p = a.u32(); float v = a.f32(); light_trace("glLightf", l, p, &v, 1); glLightf(l, p, v); }
@@ -575,6 +628,7 @@ H(draw_arrays) {
     GLenum m = a.u32(); GLint f = a.s32(); GLsizei n = a.s32();
     trace_draw(bound_tex0(), n);
     trace_geometry(c, f, n, 0, 0, bound_tex0());
+    post_before_draw(bound_tex0());
     tint_before_draw();
     fog_before_draw();
     glDrawArrays(m, f, n);
@@ -584,6 +638,7 @@ H(draw_elements) {
     GLenum m = a.u32(); GLsizei n = a.s32(); GLenum t = a.u32(); uint32_t ip = a.u32();
     trace_draw(bound_tex0(), n);
     if (!g_element_buffer) trace_geometry(c, 0, n, t, ip, bound_tex0());
+    post_before_draw(bound_tex0());
     tint_before_draw();
     fog_before_draw();
     glDrawElements(m, n, t, array_ptr(c, ip, g_element_buffer));
@@ -904,6 +959,11 @@ bool load_gl() {
     const char* ext = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
     g_fog_radial = ext && std::strstr(ext, "GL_NV_fog_distance");
     LOG("GL: fog distance %s", g_fog_radial ? "radial (NV_fog_distance)" : "by depth plane");
+    if (ok && post::init()) {
+        post::Settings ps;
+        ps.test = std::getenv("GANGSTAR_POST_TEST");
+        post::set_settings(ps);
+    }
     return ok;
 }
 
@@ -1043,6 +1103,12 @@ void set_texture_filter(TextureFilter f) {
 const VfbConfig& vfb_config() { return g_cfg; }
 
 void vfb_present(int win_w, int win_h, Fit fit, bool linear, int* rx, int* ry, int* rw, int* rh) {
+    if (g_post_pending) {  // a scene with no 2D draw after it
+        bind_game_fb();
+        run_post();
+    }
+    g_post_view_seen = false;
+    g_post_scene.view_valid = false;
     trace_event("present (end of frame %d)", g_frame);
     ++g_frame;
     // Save the GL state we touch, so the game's (possibly one-time) settings survive.

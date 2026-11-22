@@ -1103,6 +1103,23 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   3.5 s standing, swung behind once walking; W walks along the view) and in a car (turned −19°
   parked, swung back to the car's heading 89° about 2 s after driving off).
 
+### 5C.0 Screen-effect groundwork (done 2026-11-22, Q6)
+- `src/gl/post.{h,cpp}`: run by the bridge at the end of the 3D scene, i.e. before the first
+  orthographic draw on screen after a perspective one, else at present. It blits the virtual
+  framebuffer (MSAA resolved) into a colour texture + a DEPTH24_STENCIL8 texture (same format as the
+  framebuffer's depth, required for the blit), draws fullscreen passes back into the virtual
+  framebuffer and restores the game's state (glPush/PopAttrib + PushClientAttrib for the
+  fixed-function state, program / framebuffer / buffer bindings by hand; client arrays disabled while
+  drawing, since the passes use gl_VertexID and an enabled array would read stale guest pointers).
+- The bridge records per frame: split of the depth ranges, near/far of the near-city projection
+  (`[0, split]`) and the far-city projection (`[split, 1]`, not the sky's), the projection's
+  tan(fov/2), the camera view matrix (modelview of the first city batch, world textures are in
+  world space), the fog colour (from glFogfv) and the EXP2 density in use.
+- Shaders: GLSL 3.30 with a prelude; the bodies avoid anything GLSL ES 3.00 lacks, so the Android
+  GLES 3 backend can reuse them (`#version 300 es` + precision under GANGSTAR_GLES).
+- Debug: `GANGSTAR_POST_TEST=invert` (3D scene inverted, HUD untouched: verified) and `=depth`
+  (eye distance reconstructed from depth, both ranges: verified continuous).
+
 ### 5C.2 / 5C.3 Draw distance live, LOD pushed out (done 2026-11-22, Q5)
 - gPhonePerf +0x0C / +0x10 are read every frame: writing them live moves the near city's far plane
   at once (trace: f = 48001 right after switching 1× → 4×). The profile's unscaled values are kept
