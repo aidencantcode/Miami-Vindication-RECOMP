@@ -1103,6 +1103,19 @@ Tools: `tools/recomp/` (`thumb.py` exact ARMv5T Thumb decoder, `elfinfo.py` ELF/
   3.5 s standing, swung behind once walking; W walks along the view) and in a car (turned −19°
   parked, swung back to the car's heading 89° about 2 s after driving off).
 
+### 5C.2 / 5C.3 Draw distance live, LOD pushed out (done 2026-11-22, Q5)
+- gPhonePerf +0x0C / +0x10 are read every frame: writing them live moves the near city's far plane
+  at once (trace: f = 48001 right after switching 1× → 4×). The profile's unscaled values are kept
+  at load (`apply_quality`), `mods::set_draw_distance` rescales them; F1 slider 0.5×..8×, default
+  3× (was 1.5×, restart-only, max 4×). The near city ends at +0x0C, where the low-res city takes over,
+  so this is the "LOD switch" distance; per-object LOD nodes were not the visible problem.
+- Same spot, noon, uncapped fps / guest heap: 0.5× 470 fps 14.7 MB; 1.5× 400 / 15.2 MB; 4× 264 /
+  17.1 MB; 8× 128 / 18.7 MB. Driving at full throttle: 3× 290-500 fps 16.6 MB, 8× 121-149 fps 19 MB.
+  4× and 8× look the same down the beach boulevard (no low-res city in sight); 0.5× shows the blurry
+  low-res city in fog.
+- Fog end = min(far city end, 2 × the profile's far plane): it still hides the city's edge at short
+  draw distances and stays as haze at long ones (it disappeared at 8× before).
+
 ### 5C draw distance and LOD (findings 2026-11-21, nothing changed yet)
 - The `draw_distance` setting is applied once, in the `loadPerformanceProfile` hook, so it needs a
   restart (the F1 menu says so), and `apply_quality` is skipped entirely when `quality = phone`.

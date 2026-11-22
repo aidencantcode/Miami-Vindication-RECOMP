@@ -213,8 +213,11 @@ bool settings_window(settings::Settings& s, const FrameStats& st) {
                              {"ultra", "Ultra (more traffic and people)"}});
             restart_note();
             ImGui::TextDisabled("While the game runs emulated, Low is about 20%% faster than High/Phone.");
-            ch |= ImGui::SliderFloat("Draw distance", &s.draw_distance, 0.5f, 4.0f, "%.2fx");
-            restart_note();
+            ch |= ImGui::SliderFloat("Draw distance", &s.draw_distance, 0.5f, 8.0f, "%.1fx");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("How far the detailed city reaches before the low-detail city takes over\n"
+                                  "(1x = the phone, 4x and up: no low-detail city in sight in most places).\n"
+                                  "Costs frame rate, not much memory. Applies at once (not with Phone quality).");
             ch |= ImGui::Checkbox("Mipmaps", &s.mipmaps);
             restart_note();
             ch |= combo_str("Texture filtering", &s.texture_filter,

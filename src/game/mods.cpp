@@ -140,13 +140,27 @@ uint32_t player_obj(rt::Runtime& r) {
 }
 constexpr uint32_t kPlayerTarget = 0x650;  // Player: locked target (Player::_GetTarget)
 
+// Draw distance (5C.2): the profile's streaming radius (+0x0C: where the detailed city ends and the
+// low-res city starts) and low-res city far plane (+0x10), kept unscaled so the slider can rescale
+// them live (set_draw_distance).
+int32_t g_perf_base_radius = 0, g_perf_base_far = 0;
+float g_draw_distance = 1.0f;
+void write_draw_distance(rt::Runtime& r) {
+    if (!g_perf_base_radius) return;
+    auto& m = r.mem();
+    const uint32_t p = r.lib_object("gPhonePerf");
+    m.w32(p + 0x0c, uint32_t(int32_t(std::lround(g_perf_base_radius * g_draw_distance))));
+    m.w32(p + 0x10, uint32_t(int32_t(std::lround(g_perf_base_far * g_draw_distance))));
+}
+
 void apply_quality(const settings::Settings& s, cpu::Cpu& c) {
     auto& m = c.rt().mem();
     const uint32_t p = c.rt().lib_object("gPhonePerf");
     auto scale_int = [&](uint32_t off, float k) { m.w32(p + off, uint32_t(int32_t(std::lround(int32_t(m.r32(p + off)) * k)))); };
-    const float dd = std::clamp(s.draw_distance, 0.5f, 4.0f);
-    scale_int(0x0c, dd);  // texture streaming radius
-    scale_int(0x10, dd);  // low-res city far plane
+    g_perf_base_radius = int32_t(m.r32(p + 0x0c));
+    g_perf_base_far = int32_t(m.r32(p + 0x10));
+    g_draw_distance = std::clamp(s.draw_distance, 0.5f, 8.0f);
+    write_draw_distance(c.rt());
     if (s.quality == "ultra") {
         scale_int(0x1c, 1.5f);  // more peds / traffic
         scale_int(0x20, 1.5f);
@@ -638,6 +652,13 @@ void set_free_look_return(float delay_s, float speed_deg) {
     g_fl_return_speed = std::max(0.0f, speed_deg);
 }
 void set_smooth_physics(bool on) { g_smooth_physics = on; }
+int perf_base_far() { return g_perf_base_far; }
+void set_draw_distance(float dd) {
+    g_draw_distance = std::clamp(dd, 0.5f, 8.0f);
+    if (g_rt) write_draw_distance(*g_rt);
+    LOG("graphics: draw distance %.2f (streaming radius %d, low-res city far %d)", g_draw_distance,
+        int(std::lround(g_perf_base_radius * g_draw_distance)), int(std::lround(g_perf_base_far * g_draw_distance)));
+}
 void debug_command(const std::string& cmd) { g_debug_cmds.push_back(cmd); }
 
 // The person or vehicle at the screen centre: the phone's tap picker (HudScreen::tappedTarget: a ray
@@ -784,6 +805,8 @@ void frame(cpu::Cpu& c, double dt) {
             } else {
                 LOG("test: nearcar: no vehicle found");
             }
+        } else if (cmd.rfind("drawdist", 0) == 0) {  // drawdist<x>, e.g. drawdist2.5
+            set_draw_distance(float(std::atof(cmd.c_str() + 8)));
         } else {
             LOG("test: unknown command '%s'", cmd.c_str());
         }

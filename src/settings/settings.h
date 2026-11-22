@@ -23,7 +23,7 @@ struct Settings {
     // [graphics]
     std::string quality = "high";           // phone (game's own pick = profile 1, untouched) | low (fastest) | high | ultra (more NPCs)
     bool mipmaps = true;                    // the phone profile turned them off
-    float draw_distance = 1.5f;             // multiplier on the profile's far plane + texture streaming radius
+    float draw_distance = 3.0f;             // 0.5..8, live: multiplier on the detailed-city radius (where the low-detail city starts) and the far city
     int anisotropy = 8;                     // 0/1 = off, 2..16
     std::string texture_filter = "game";    // game | nearest | bilinear | trilinear
     bool night_textures = true;             // restore the unused night city textures (game/night_textures)

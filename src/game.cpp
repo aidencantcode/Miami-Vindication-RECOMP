@@ -451,7 +451,13 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                 gles1::FogConfig fog;
                 fog.atmospheric = cfg.fog == "atmospheric";
                 fog.strength = cfg.fog_strength;
-                if (const int32_t lod_end = int32_t(rt.mem().r32(perf_obj + 0x10)); lod_end > 0) fog.far_end = float(lod_end);
+                // Fog reaches its end where the far city ends, but at most twice the profile's own
+                // distance: it hides the city's edge at short draw distances and stays atmospheric haze
+                // (not gone) at long ones.
+                if (const int32_t lod_end = int32_t(rt.mem().r32(perf_obj + 0x10)); lod_end > 0) {
+                    fog.far_end = float(lod_end);
+                    if (const int base = mods::perf_base_far(); base > 0) fog.far_end = std::min(fog.far_end, 2.0f * base);
+                }
                 gles1::set_fog(fog);
                 cpu.call(rt.lib_func("Java_com_gameloft_android_GAND_GloftGMHP_ML_GameRenderer_nativeRender"), {env, c_gr});
                 const double ms = std::chrono::duration<double, std::milli>(Clock::now() - t_game).count();
@@ -499,6 +505,7 @@ int run_game(const rt::Paths& paths, const RunOptions& opt) {
                     if (cfg.camera_mode != before.camera_mode) mods::set_camera_mode(cfg.camera_mode);
                     mods::set_free_look_return(cfg.freelook_return_delay, cfg.freelook_return_speed);
                     if (cfg.smooth_physics != before.smooth_physics) mods::set_smooth_physics(cfg.smooth_physics);
+                    if (cfg.draw_distance != before.draw_distance) mods::set_draw_distance(cfg.draw_distance);
                     if (cfg.manual_aim_spread != before.manual_aim_spread) mods::set_manual_aim_spread(cfg.manual_aim_spread);
                     if (fast_forward) {  // speed changed in the menu
                         stats.fast_forward = std::clamp(cfg.fast_forward_speed, 2, 8);

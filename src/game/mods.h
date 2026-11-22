@@ -65,6 +65,10 @@ void camera_input(float dx, float dy);
 void set_free_look_return(float delay_s, float speed_deg);
 // One physics step per frame instead of the game's fixed 60 Hz ([game] smooth_physics), live.
 void set_smooth_physics(bool on);
+// Draw distance multiplier (0.5..8) on the profile's streaming radius / low-res city far plane, live.
+void set_draw_distance(float dd);
+// The profile's own low-res city far plane before the multiplier (0 until the profile is loaded).
+int perf_base_far();
 // Scripted test helpers (input script "mod <name>"), run at the next frame(): nearcar.
 void debug_command(const std::string& cmd);
 
