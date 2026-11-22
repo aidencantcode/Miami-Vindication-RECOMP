@@ -311,6 +311,17 @@ Queue:
 - Q10 Android (5B), renderer chosen by us for Snapdragon **and** Mali: arm64 build, GLES 3 shader
   backend, texture decode, touch/tilt/controller, speed work, APK with saves in the app folder.
   Shader code for Q6-Q9 must stay portable to it (GLSL that builds as desktop GL and GLES 3).
+  Steps:
+  - ✅ 10.0 Toolchain installed (SDK, NDK r27c, CMake; NOTES 5B). No accelerated emulator (needs a reboot
+    / admin): device tests are the owner's.
+  - ✅ 10.1 Shader renderer (`src/gl/ffp`, da51b4d), verified identical on Windows (`renderer = shader`).
+  - 10.2 DXT (S3TC) software decode for GPUs without it (Adreno, Mali), testable on Windows by forcing it.
+  - 10.3 Portable platform code: guest memory (mmap), recompiled-code fault handling (signals), no
+    Unicorn in the Android build, GL entry points from GLES 3 directly, data / save paths.
+  - 10.4 Android build: CMake + NDK for arm64-v8a (and x86_64 for emulators), SDL2 from source.
+  - 10.5 App: SDL activity, manifest, Gradle, game data location (the owner copies the data folder to
+    the device), touch / tilt / controllers, saves in the app folder; APK builds.
+  - 10.6 Speed work for handhelds (measure on device first).
 
 ## ⏸ Phase 5: fixes from play-testing, then the Android port (planned 2026-11-20; owner says when to start)
 
